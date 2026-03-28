@@ -4,6 +4,26 @@ Simple, self-hosted server monitoring. One PHP file, one SQLite database, one Ba
 
 This is a **pet project** — built for personal use to monitor Ubuntu servers. It's intentionally minimal: no frameworks, no build steps, no dependencies beyond what's already on a standard LAMP stack. If you find it useful or want to improve it, contributions are welcome.
 
+## Screenshots
+
+### Dashboard (light)
+![Dashboard Light](screenshots/dashboard-light.png)
+
+### Dashboard (dark)
+![Dashboard Dark](screenshots/dashboard-dark.png)
+
+### Server Detail
+![Server Detail](screenshots/server-detail.png)
+
+### Settings
+![Settings](screenshots/settings.png)
+
+### Mobile
+<p float="left">
+  <img src="screenshots/mobile-light.png" width="300" alt="Mobile Light" />
+  <img src="screenshots/mobile-dark.png" width="300" alt="Mobile Dark" />
+</p>
+
 ## What it does
 
 A central PHP web app receives metrics from remote Ubuntu/Linux servers via lightweight Bash agents. Each server gets its own card on a dashboard showing CPU, memory, disk, IOPS, network, mail queue, and load averages — with configurable warning/critical thresholds.
@@ -43,7 +63,7 @@ That's it. Servers appear on the dashboard automatically.
 
 ## Features
 
-- Dark/light theme
+- Dark/light theme (follows OS preference, manual toggle available)
 - Drag-and-drop card reordering (persisted)
 - Servers with issues automatically float to the top
 - Per-server configurable check intervals
@@ -51,6 +71,7 @@ That's it. Servers appear on the dashboard automatically.
 - Status badges: CRITICAL, WARNING, OFFLINE
 - Server detail page with metrics history
 - Settings page for enrollment, intervals, retention, and alert thresholds
+- Enrollment key rotation with old key management
 - Secure enrollment flow (unique per-agent keys)
 - Graceful degradation when agent tools are missing
 - Automatic metric retention cleanup
@@ -69,6 +90,7 @@ That's it. Servers appear on the dashboard automatically.
 - Prepared statements for all SQL
 - `hash_equals()` for enrollment key comparison
 - Unique 64-char hex agent key per server
+- Enrollment key rotation — old keys stay active until explicitly invalidated
 - Agent config stored chmod 600
 - No built-in dashboard auth — secure at web server level (`.htaccess`, `auth_basic`, Cloudflare Access, etc.)
 

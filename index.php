@@ -228,7 +228,15 @@ function handleEnroll(): never {
     if ($ekey === '' || $host === '') jsonErr('Missing enrollment_key or hostname');
 
     $stored = setting('enrollment_key');
-    if (!$stored || !hash_equals($stored, $ekey)) jsonErr('Invalid enrollment key', 403);
+    $valid = $stored && hash_equals($stored, $ekey);
+    if (!$valid) {
+        // Check previous (still-active) keys
+        $prev = json_decode(setting('previous_keys') ?? '[]', true);
+        foreach ($prev as $pk) {
+            if (hash_equals($pk, $ekey)) { $valid = true; break; }
+        }
+    }
+    if (!$valid) jsonErr('Invalid enrollment key', 403);
 
     $d = db();
     $interval = (int)(setting('interval_minutes') ?? 15);
@@ -339,9 +347,32 @@ function handleSettings(): never {
         }
     }
 
-    // Regenerate enrollment key if requested
+    // Regenerate enrollment key — keep old one active by default
     if (!empty($_POST['regenerate_key'])) {
+        $old = setting('enrollment_key');
+        $prev = json_decode(setting('previous_keys') ?? '[]', true);
+        $prev[] = $old;
+        setSetting('previous_keys', json_encode($prev));
         setSetting('enrollment_key', bin2hex(random_bytes(16)));
+        header('Location: ?action=settings&saved=1&regenerated=1');
+        exit;
+    }
+
+    // Invalidate a previous key
+    if (!empty($_POST['invalidate_key'])) {
+        $keyToRemove = $_POST['invalidate_key'];
+        $prev = json_decode(setting('previous_keys') ?? '[]', true);
+        $prev = array_values(array_filter($prev, fn($k) => $k !== $keyToRemove));
+        setSetting('previous_keys', json_encode($prev));
+        header('Location: ?action=settings&saved=1');
+        exit;
+    }
+
+    // Invalidate all previous keys
+    if (!empty($_POST['invalidate_all_keys'])) {
+        setSetting('previous_keys', '[]');
+        header('Location: ?action=settings&saved=1');
+        exit;
     }
 
     header('Location: ?action=settings&saved=1');
@@ -637,17 +668,22 @@ function showSettings(): never {
         <a href="?" class="back">&larr; Dashboard</a>
         <h1 style="margin:.75rem 0">Settings</h1>
         <?php if ($saved): ?><div class="alert-ok">Settings saved.</div><?php endif; ?>
+        <?php if (isset($_GET['regenerated'])): ?><div class="alert-warn">Enrollment key regenerated. The previous key is still active below &mdash; invalidate it when you no longer need it.</div><?php endif; ?>
 
         <form method="post" action="?action=settings">
 
-            <?php $ekey = setting('enrollment_key'); $url = baseUrl(); ?>
+            <?php
+            $ekey = setting('enrollment_key');
+            $url = baseUrl();
+            $prevKeys = json_decode(setting('previous_keys') ?? '[]', true);
+            ?>
             <fieldset>
                 <legend>Enrollment</legend>
-                <label>Enrollment Key</label>
+                <label>Current Enrollment Key</label>
                 <div class="ekey-row">
                     <code class="ekey-code" id="ekey"><?=e($ekey)?></code>
                     <button type="button" onclick="copyEl('ekey',this)" class="btn-sm">Copy</button>
-                    <button type="submit" name="regenerate_key" value="1" class="btn-sm" onclick="return confirm('Regenerate enrollment key? Existing agents keep working, but new installs need the new key.')">Regenerate</button>
+                    <button type="submit" name="regenerate_key" value="1" class="btn-sm" onclick="return confirm('Generate a new enrollment key?\n\nThe current key will be kept active so existing install scripts still work. You can invalidate old keys below.')">Regenerate</button>
                 </div>
                 <label>Install Command</label>
                 <div class="ekey-row">
@@ -657,6 +693,20 @@ function showSettings(): never {
   '<?=e($ekey)?>'</code>
                     <button type="button" onclick="copyEl('icmd',this)" class="btn-sm">Copy</button>
                 </div>
+                <?php if (!empty($prevKeys)): ?>
+                <div class="prev-keys">
+                    <label>Previous Keys (still active)</label>
+                    <?php foreach ($prevKeys as $i => $pk): ?>
+                    <div class="prev-key-row">
+                        <code class="ekey-code"><?=e($pk)?></code>
+                        <button type="submit" name="invalidate_key" value="<?=e($pk)?>" class="btn-sm btn-sm-danger" onclick="return confirm('Invalidate this key?\n\nAny install script using this key will stop working for new enrollments. Already-enrolled agents are NOT affected.')">Invalidate</button>
+                    </div>
+                    <?php endforeach; ?>
+                    <div style="margin-top:.5rem">
+                        <button type="submit" name="invalidate_all_keys" value="1" class="btn-sm btn-sm-danger" onclick="return confirm('Invalidate ALL previous keys?\n\nOnly the current key will remain active. Already-enrolled agents are NOT affected.')">Invalidate All Previous Keys</button>
+                    </div>
+                </div>
+                <?php endif; ?>
             </fieldset>
 
             <fieldset>
@@ -780,7 +830,7 @@ header h1 span{color:#60a5fa}
 .theme-toggle:hover{color:#f8fafc;border-color:#94a3b8}
 
 /* ── Status Summary ── */
-.status-summary{display:flex;align-items:center;gap:.4rem;margin:1rem 0 .5rem;padding:.5rem .75rem;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
+.status-summary{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:1rem 0 .5rem;padding:.5rem .75rem;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
 .ss-item{font-size:.78rem;padding:.2rem .55rem;border-radius:10px;font-weight:500;white-space:nowrap}
 .ss-item:first-child{color:var(--text);font-weight:600;padding-right:.5rem;border-right:1px solid var(--card-border);margin-right:.15rem}
 .ss-online{color:var(--green)}
@@ -868,6 +918,12 @@ label{display:block;font-size:.82rem;color:var(--muted);margin-top:.5rem}
 .ekey-row .btn-sm{flex-shrink:0}
 input[type="number"]{width:100%;padding:.4rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.85rem;background:var(--input-bg);color:var(--text);margin-top:.25rem}
 .alert-ok{background:color-mix(in srgb, var(--green) 15%, var(--card));border:1px solid var(--green);color:var(--green);padding:.5rem 1rem;border-radius:6px;font-size:.85rem;margin-bottom:1rem}
+.alert-warn{background:color-mix(in srgb, var(--amber) 15%, var(--card));border:1px solid var(--amber);color:var(--amber);padding:.5rem 1rem;border-radius:6px;font-size:.85rem;margin-bottom:1rem}
+.prev-keys{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)}
+.prev-key-row{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;min-width:0}
+.prev-key-row .ekey-code{opacity:.7}
+.btn-sm-danger{background:var(--red)!important}
+.btn-sm-danger:hover{opacity:.85}
 
 /* ── Empty ── */
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)}
@@ -881,7 +937,7 @@ input[type="number"]{width:100%;padding:.4rem .6rem;border:1px solid var(--input
 </style>
 <script>
 (function(){
-    var t=localStorage.getItem('sermony-theme')||'light';
+    var t=localStorage.getItem('sermony-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
     document.documentElement.setAttribute('data-theme',t);
 })();
 </script>
