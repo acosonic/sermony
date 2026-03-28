@@ -49,6 +49,9 @@ function db(): SQLite3 {
     $i->exec('PRAGMA journal_mode=WAL');
     $i->exec('PRAGMA foreign_keys=ON');
     if ($new) migrate($i);
+    // Add columns for existing databases (safe to call multiple times)
+    @$i->exec('ALTER TABLE servers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+    @$i->exec('ALTER TABLE servers ADD COLUMN interval_minutes INTEGER');
     return $i;
 }
 
@@ -64,7 +67,9 @@ function migrate(SQLite3 $db): void {
         public_ip    TEXT,
         fqdn         TEXT,
         created_at   TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
-        last_seen_at TEXT
+        last_seen_at TEXT,
+        sort_order   INTEGER NOT NULL DEFAULT 0,
+        interval_minutes INTEGER
     )');
     $db->exec('CREATE TABLE metrics (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,9 +150,9 @@ function timeAgo(?string $t): string {
     return (int)floor($d / 86400) . 'd ago';
 }
 
-function isOnline(?string $t): bool {
+function isOnline(?string $t, ?int $serverInterval = null): bool {
     if (!$t) return false;
-    $int = (int)(setting('interval_minutes') ?? 15);
+    $int = $serverInterval ?? (int)(setting('interval_minutes') ?? 15);
     return (time() - strtotime($t)) < ($int * OFFLINE_MULT * 60);
 }
 
@@ -201,6 +206,8 @@ match ($action) {
     'enroll'         => handleEnroll(),
     'ingest'         => handleIngest(),
     'delete'         => handleDelete(),
+    'reorder'        => handleReorder(),
+    'update-server'  => handleUpdateServer(),
     'settings'       => ($_SERVER['REQUEST_METHOD'] === 'POST' ? handleSettings() : showSettings()),
     'server'         => showServer(),
     'install-script' => serveScript('install.sh'),
@@ -226,11 +233,11 @@ function handleEnroll(): never {
     $d = db();
     $interval = (int)(setting('interval_minutes') ?? 15);
 
-    $s = $d->prepare('SELECT agent_key FROM servers WHERE hostname=:h');
+    $s = $d->prepare('SELECT agent_key, interval_minutes AS srv_int FROM servers WHERE hostname=:h');
     $s->bindValue(':h', $host, SQLITE3_TEXT);
     $row = $s->execute()->fetchArray(SQLITE3_ASSOC);
     if ($row) {
-        jsonOut(['agent_key' => $row['agent_key'], 'interval' => $interval]);
+        jsonOut(['agent_key' => $row['agent_key'], 'interval' => (int)($row['srv_int'] ?? $interval)]);
     }
 
     $ak = bin2hex(random_bytes(32));
@@ -341,6 +348,38 @@ function handleSettings(): never {
     exit;
 }
 
+function handleReorder(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') jsonErr('POST required', 405);
+    $in = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($in)) jsonErr('Invalid JSON');
+    $d = db();
+    $s = $d->prepare('UPDATE servers SET sort_order=:pos WHERE id=:id');
+    foreach ($in as $item) {
+        $s->bindValue(':id', (int)($item['id'] ?? 0), SQLITE3_INTEGER);
+        $s->bindValue(':pos', (int)($item['pos'] ?? 0), SQLITE3_INTEGER);
+        $s->execute();
+        $s->reset();
+    }
+    jsonOut(['ok' => true]);
+}
+
+function handleUpdateServer(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        header('Location: ?');
+        exit;
+    }
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id < 1) { header('Location: ?'); exit; }
+    $intVal = $_POST['interval_minutes'] ?? '';
+    $d = db();
+    $s = $d->prepare('UPDATE servers SET interval_minutes=:int WHERE id=:id');
+    $s->bindValue(':id', $id, SQLITE3_INTEGER);
+    $s->bindValue(':int', $intVal !== '' ? max(1, (int)$intVal) : null);
+    $s->execute();
+    header('Location: ?action=server&id=' . $id . '&saved=1');
+    exit;
+}
+
 function serveScript(string $file): never {
     $path = __DIR__ . '/' . $file;
     if (!file_exists($path)) {
@@ -369,19 +408,34 @@ function showDashboard(): never {
         LEFT JOIN metrics m ON m.id = (
             SELECT id FROM metrics WHERE server_id = s.id ORDER BY received_at DESC LIMIT 1
         )
-        ORDER BY s.hostname
+        ORDER BY s.sort_order, s.hostname
     ');
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
         $servers[] = $row;
     }
 
-    // Count statuses for summary
+    // Compute health + online for each server, then sort: issues first
     $counts = ['total' => count($servers), 'online' => 0, 'offline' => 0, 'crit' => 0, 'warn' => 0];
-    foreach ($servers as $srv) {
-        if (isOnline($srv['last_seen_at'])) $counts['online']++; else $counts['offline']++;
-        $h = serverHealth($srv);
-        if ($h === 'crit') $counts['crit']++;
-        elseif ($h === 'warn') $counts['warn']++;
+    $hasCustomOrder = false;
+    foreach ($servers as &$srv) {
+        $srvInt = $srv['interval_minutes'] !== null ? (int)$srv['interval_minutes'] : null;
+        $srv['_online'] = isOnline($srv['last_seen_at'], $srvInt);
+        $srv['_health'] = serverHealth($srv);
+        if ($srv['_online']) $counts['online']++; else $counts['offline']++;
+        if ($srv['_health'] === 'crit') $counts['crit']++;
+        elseif ($srv['_health'] === 'warn') $counts['warn']++;
+        if ((int)$srv['sort_order'] !== 0) $hasCustomOrder = true;
+    }
+    unset($srv);
+
+    // Auto-sort by severity if no custom drag-drop order has been set
+    if (!$hasCustomOrder) {
+        usort($servers, function ($a, $b) {
+            $pri = ['crit' => 0, 'warn' => 1, 'ok' => 3];
+            $pa = $a['_online'] ? ($pri[$a['_health']] ?? 3) : 2;
+            $pb = $b['_online'] ? ($pri[$b['_health']] ?? 3) : 2;
+            return $pa !== $pb ? $pa - $pb : strcmp($a['hostname'], $b['hostname']);
+        });
     }
 
     pageTop('Dashboard');
@@ -402,10 +456,10 @@ function showDashboard(): never {
         <p>Go to <a href="?action=settings">Settings</a> for the install command to add your first server.</p>
     </div>
     <?php else: ?>
-    <div class="grid">
+    <div class="grid" id="serverGrid">
         <?php foreach ($servers as $srv):
-            $on = isOnline($srv['last_seen_at']);
-            $health = serverHealth($srv);
+            $on = $srv['_online'];
+            $health = $srv['_health'];
             $cpu  = $srv['cpu_usage'];
             $mem  = $srv['memory_usage'];
             $disk = $srv['disk_usage'];
@@ -414,7 +468,7 @@ function showDashboard(): never {
             elseif ($health === 'crit') $cardClass .= ' card-crit';
             elseif ($health === 'warn') $cardClass .= ' card-warn';
         ?>
-        <div class="<?=$cardClass?>">
+        <div class="<?=$cardClass?>" data-id="<?=$srv['id']?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? 'dot-on' : 'dot-off'?>"></span>
                 <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname"><?=e($srv['hostname'])?></a>
@@ -492,7 +546,8 @@ function showServer(): never {
     $srv = $s->execute()->fetchArray(SQLITE3_ASSOC);
     if (!$srv) { header('Location: ?'); exit; }
 
-    $on = isOnline($srv['last_seen_at']);
+    $srvInt = $srv['interval_minutes'] !== null ? (int)$srv['interval_minutes'] : null;
+    $on = isOnline($srv['last_seen_at'], $srvInt);
 
     $s = $d->prepare('SELECT * FROM metrics WHERE server_id=:id ORDER BY received_at DESC LIMIT :lim');
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
@@ -515,11 +570,22 @@ function showServer(): never {
             <span><strong>Status:</strong> <?=$on ? 'Online' : 'Offline'?></span>
             <span><strong>Enrolled:</strong> <?=e(substr($srv['created_at'], 0, 16))?></span>
             <span><strong>Last seen:</strong> <?=timeAgo($srv['last_seen_at'])?></span>
+            <span><strong>Interval:</strong> <?=$srv['interval_minutes'] !== null ? $srv['interval_minutes'] . 'm (custom)' : (setting('interval_minutes') ?? 15) . 'm (global)'?></span>
         </div>
-        <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
-            <input type="hidden" name="id" value="<?=$srv['id']?>">
-            <button type="submit" class="btn-danger">Delete Server</button>
-        </form>
+        <?php if (isset($_GET['saved'])): ?><div class="alert-ok" style="margin-top:.5rem">Server settings saved.</div><?php endif; ?>
+        <div style="display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
+            <form method="post" action="?action=update-server" style="display:flex;gap:.5rem;align-items:center">
+                <input type="hidden" name="id" value="<?=$srv['id']?>">
+                <label style="font-size:.82rem;color:var(--muted);margin:0">Interval (min):</label>
+                <input type="number" name="interval_minutes" value="<?=e($srv['interval_minutes'] ?? '')?>" placeholder="<?=e(setting('interval_minutes') ?? '15')?>" min="1" max="1440" style="width:5rem">
+                <button type="submit" class="btn-sm">Save</button>
+                <span style="font-size:.75rem;color:var(--subtle)">Leave empty for global default</span>
+            </form>
+            <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
+                <input type="hidden" name="id" value="<?=$srv['id']?>">
+                <button type="submit" class="btn-danger">Delete Server</button>
+            </form>
+        </div>
     </div>
 
     <?php if (empty($metrics)): ?>
@@ -585,7 +651,10 @@ function showSettings(): never {
                 </div>
                 <label>Install Command</label>
                 <div class="ekey-row">
-                    <code class="ekey-code install-cmd" id="icmd">curl -sSL '<?=e($url)?>?action=install-script' | sudo bash -s -- '<?=e($url)?>' '<?=e($ekey)?>'</code>
+                    <code class="ekey-code install-cmd" id="icmd">curl -sSL '<?=e($url)?>?action=install-script' \
+  | sudo bash -s -- \
+  '<?=e($url)?>' \
+  '<?=e($ekey)?>'</code>
                     <button type="button" onclick="copyEl('icmd',this)" class="btn-sm">Copy</button>
                 </div>
             </fieldset>
@@ -711,12 +780,13 @@ header h1 span{color:#60a5fa}
 .theme-toggle:hover{color:#f8fafc;border-color:#94a3b8}
 
 /* ── Status Summary ── */
-.status-summary{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:.25rem}
-.ss-item{font-size:.8rem;padding:.2rem .6rem;border-radius:12px;background:var(--card);border:1px solid var(--card-border);color:var(--muted)}
-.ss-online{color:var(--green);border-color:var(--green)}
-.ss-offline{color:var(--red);border-color:var(--red)}
-.ss-crit{color:#fff;background:var(--red);border-color:var(--red)}
-.ss-warn{color:#000;background:var(--amber);border-color:var(--amber)}
+.status-summary{display:flex;align-items:center;gap:.4rem;margin:1rem 0 .5rem;padding:.5rem .75rem;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
+.ss-item{font-size:.78rem;padding:.2rem .55rem;border-radius:10px;font-weight:500;white-space:nowrap}
+.ss-item:first-child{color:var(--text);font-weight:600;padding-right:.5rem;border-right:1px solid var(--card-border);margin-right:.15rem}
+.ss-online{color:var(--green)}
+.ss-offline{color:var(--red)}
+.ss-crit{color:#fff;background:var(--red);border-radius:10px}
+.ss-warn{color:#000;background:var(--amber);border-radius:10px}
 
 /* ── Setup Bar ── */
 .setup-bar{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;margin:1.25rem 0;font-size:.85rem;display:flex;flex-direction:column;gap:.5rem}
@@ -728,8 +798,11 @@ header h1 span{color:#60a5fa}
 /* ── Grid & Cards ── */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;margin:1.25rem 0}
 
-.card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;transition:box-shadow .15s}
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;transition:box-shadow .15s,opacity .15s}
 .card:hover{box-shadow:0 4px 12px var(--card-hover)}
+.card[draggable]{cursor:grab}
+.card[draggable]:active{cursor:grabbing}
+.card.dragging{opacity:.4}
 .card-offline{border-left:3px solid var(--red)}
 .card-crit{border-left:3px solid var(--red);background:color-mix(in srgb, var(--red) 5%, var(--card))}
 .card-warn{border-left:3px solid var(--amber);background:color-mix(in srgb, var(--amber) 5%, var(--card))}
@@ -764,7 +837,7 @@ header h1 span{color:#60a5fa}
 .bar>div{height:100%;border-radius:2px;transition:width .3s}
 
 /* ── Detail Page ── */
-.detail-header{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1.25rem;margin:1.25rem 0}
+.detail-header{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1.25rem;margin:1.25rem 0;overflow:hidden}
 .detail-title{display:flex;align-items:center;gap:.5rem;margin:.75rem 0}
 .detail-title h1{font-size:1.5rem}
 .detail-meta{display:flex;flex-wrap:wrap;gap:1rem;font-size:.85rem;color:var(--muted);margin-bottom:1rem}
@@ -784,13 +857,15 @@ tr:hover td{background:var(--table-hover)}
 
 /* ── Settings ── */
 .settings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;margin-top:1rem}
-fieldset{border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;margin-top:1rem}
+fieldset{border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;margin-top:1rem;min-width:0;overflow:hidden}
 .settings-grid fieldset{margin-top:0}
 legend{font-weight:600;font-size:.9rem;padding:0 .5rem}
 label{display:block;font-size:.82rem;color:var(--muted);margin-top:.5rem}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-.ekey-row{display:flex;gap:.5rem;align-items:center;margin-top:.35rem}
-.ekey-code{font-size:.78rem;word-break:break-all;flex:1;background:var(--code-bg);padding:.35rem .5rem;border-radius:4px;line-height:1.4}
+.ekey-row{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;min-width:0}
+.ekey-code{font-size:.78rem;min-width:0;flex:1;background:var(--code-bg);padding:.35rem .5rem;border-radius:4px;line-height:1.4;word-break:break-all}
+.install-cmd{white-space:pre-wrap;word-break:normal}
+.ekey-row .btn-sm{flex-shrink:0}
 input[type="number"]{width:100%;padding:.4rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.85rem;background:var(--input-bg);color:var(--text);margin-top:.25rem}
 .alert-ok{background:color-mix(in srgb, var(--green) 15%, var(--card));border:1px solid var(--green);color:var(--green);padding:.5rem 1rem;border-radius:6px;font-size:.85rem;margin-bottom:1rem}
 
@@ -842,6 +917,34 @@ function copyEl(id,btn){
         btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500);
     });
 }
+/* Drag & drop */
+(function(){
+    var grid=document.getElementById('serverGrid');
+    if(!grid)return;
+    var dragged=null;
+    grid.addEventListener('dragstart',function(e){
+        var c=e.target.closest('.card[data-id]');if(!c)return;
+        dragged=c;c.classList.add('dragging');
+        e.dataTransfer.effectAllowed='move';
+        e.dataTransfer.setData('text/plain','');
+    });
+    grid.addEventListener('dragover',function(e){
+        e.preventDefault();
+        var c=e.target.closest('.card[data-id]');
+        if(!c||c===dragged)return;
+        var r=c.getBoundingClientRect();
+        var after=e.clientY>r.top+r.height/2;
+        grid.insertBefore(dragged,after?c.nextSibling:c);
+    });
+    grid.addEventListener('dragend',function(){
+        if(dragged)dragged.classList.remove('dragging');
+        dragged=null;
+        var cards=grid.querySelectorAll('.card[data-id]');
+        var order=[];
+        cards.forEach(function(c,i){order.push({id:+c.dataset.id,pos:i+1})});
+        fetch('?action=reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(order)});
+    });
+})();
 </script>
 </body>
 </html>

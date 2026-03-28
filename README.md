@@ -2,15 +2,17 @@
 
 Simple, self-hosted server monitoring. One PHP file, one SQLite database, one Bash agent.
 
+This is a **pet project** — built for personal use to monitor Ubuntu servers. It's intentionally minimal: no frameworks, no build steps, no dependencies beyond what's already on a standard LAMP stack. If you find it useful or want to improve it, contributions are welcome.
+
 ## What it does
 
-A central PHP web app receives metrics from remote Linux servers via lightweight Bash agents. Each server gets its own card on a dashboard showing CPU, memory, disk, IOPS, network, mail queue, and load averages — with configurable warning/critical thresholds.
+A central PHP web app receives metrics from remote Ubuntu/Linux servers via lightweight Bash agents. Each server gets its own card on a dashboard showing CPU, memory, disk, IOPS, network, mail queue, and load averages — with configurable warning/critical thresholds.
 
 ## Requirements
 
-**Server:** PHP 8+, SQLite3, a web server (Apache/nginx/Caddy)
+**Server (dashboard):** PHP 8+, SQLite3, Apache/nginx/Caddy
 
-**Agents:** Bash, curl, cron (standard on any Linux)
+**Monitored machines:** Ubuntu (tested), should work on most Debian-based distros. Requires Bash, curl, and cron.
 
 ## Quick Start
 
@@ -26,37 +28,41 @@ Visit the URL in your browser. The database is created automatically.
 
 ### 2. Add servers to monitor
 
-Go to **Settings** to find the install command, then run it on each machine you want to monitor:
+Go to **Settings** to find the install command, then run it on each machine:
 
 ```bash
-curl -sSL 'https://your-server/?action=install-script' | sudo bash -s -- 'https://your-server/' 'ENROLLMENT_KEY'
+curl -sSL 'https://your-server/?action=install-script' \
+  | sudo bash -s -- \
+  'https://your-server/' \
+  'ENROLLMENT_KEY'
 ```
 
-Optional third argument: interval in minutes (default: 15).
+Optional third argument: interval in minutes (default: 15). Each server's interval can also be configured individually from the server detail page.
 
 That's it. Servers appear on the dashboard automatically.
+
+## Features
+
+- Dark/light theme
+- Drag-and-drop card reordering (persisted)
+- Servers with issues automatically float to the top
+- Per-server configurable check intervals
+- Configurable alert thresholds (CPU, memory, disk, mail queue)
+- Status badges: CRITICAL, WARNING, OFFLINE
+- Server detail page with metrics history
+- Settings page for enrollment, intervals, retention, and alert thresholds
+- Secure enrollment flow (unique per-agent keys)
+- Graceful degradation when agent tools are missing
+- Automatic metric retention cleanup
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `index.php` | Entire server app — routing, API, dashboard, settings, CSS |
+| `index.php` | Entire server app — routing, API, dashboard, settings, CSS, JS |
 | `sermony-agent.sh` | Client agent — collects metrics, sends JSON via curl |
 | `install.sh` | Client installer — enrolls, downloads agent, sets up cron |
 | `fake-agents.sh` | Test script — creates 10 fake servers with various health states |
-
-## Features
-
-- Dark/light theme with localStorage persistence
-- Configurable alert thresholds (CPU, memory, disk, mail queue)
-- Status badges: CRITICAL (pulsing), WARNING, OFFLINE
-- Dashboard status summary bar
-- Server detail page with metrics history table
-- Auto-refresh based on configured interval
-- Settings page for all configuration
-- Secure enrollment flow (one-time enrollment key, unique per-agent keys)
-- Graceful degradation when agent tools are missing
-- 30-day metric retention with probabilistic cleanup
 
 ## Security
 
@@ -72,3 +78,7 @@ That's it. Servers appear on the dashboard automatically.
 sudo crontab -l | grep -v sermony | sudo crontab -
 sudo rm -rf /opt/sermony
 ```
+
+## Contributing
+
+This is a pet project, but changes are welcome. If you have a fix, improvement, or idea — open an issue or submit a pull request.
