@@ -1,0 +1,4 @@
+sermony.db
+sermony.db-wal
+sermony.db-shm
+*.log
