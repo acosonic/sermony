@@ -2,3 +2,5 @@ sermony.db
 sermony.db-wal
 sermony.db-shm
 *.log
+resume.sh
+todo.txt

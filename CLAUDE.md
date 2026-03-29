@@ -36,9 +36,13 @@ All requests go through `index.php`. The `?action=` parameter selects the handle
 |--------|--------|---------|
 | (empty/dashboard) | GET | Dashboard with server cards |
 | server | GET | Server detail page with metrics history |
+| dashboard-json | GET | JSON endpoint for auto-refresh |
 | enroll | POST | Agent enrollment (returns unique agent_key) |
 | ingest | POST | Receive metrics from agents |
 | delete | POST | Remove server + cascading metric delete |
+| reorder | POST | Save drag-drop card order |
+| update-server | POST | Update per-server interval and notes |
+| export-csv | GET | Download server metrics as CSV |
 | install-script | GET | Serve `install.sh` |
 | agent-script | GET | Serve `sermony-agent.sh` |
 
@@ -51,7 +55,7 @@ All requests go through `index.php`. The `?action=` parameter selects the handle
 
 ### Database Schema (SQLite)
 
-Three tables: `settings` (key-value), `servers` (id, hostname, agent_key, public_ip, fqdn, timestamps), `metrics` (server_id FK with ON DELETE CASCADE, cpu/mem/disk/iops/network/mail/load, timestamps).
+Four tables: `settings` (key-value), `servers` (id, hostname, agent_key, public_ip, fqdn, notes, sort_order, interval_minutes, timestamps), `metrics` (server_id FK with ON DELETE CASCADE, cpu/mem/disk/iops/network/mail/load, timestamps), `alert_log` (server_id FK, alert_type, channel, sent_at).
 
 Index: `idx_metrics_lookup ON metrics(server_id, received_at DESC)` — used by the dashboard's correlated subquery for latest metrics.
 
