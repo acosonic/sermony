@@ -62,7 +62,7 @@ curl -sSL 'https://your-server/?action=install-script' \
   'ENROLLMENT_KEY'
 ```
 
-Optional third argument: interval in minutes (default: 15). Each server's interval can also be configured individually from the server detail page.
+Optional third argument: interval in minutes (default: 15). Each server's interval can also be changed from the dashboard — the agent picks up the new interval automatically on its next run.
 
 That's it. Servers appear on the dashboard automatically.
 
@@ -76,7 +76,7 @@ That's it. Servers appear on the dashboard automatically.
 - Drag-and-drop card reordering (persisted)
 - Auto-sort by severity: critical > warning > stale > offline > healthy
 - Stale detection — servers that miss expected check-ins get flagged before going offline
-- Per-server configurable check intervals and alert thresholds
+- Per-server configurable check intervals and alert thresholds (agents auto-update their cron)
 - Configurable alert thresholds (CPU, memory, disk, mail queue)
 - Email and webhook notifications with configurable cooldown
 - Status badges: CRITICAL, WARNING, STALE, OFFLINE
