@@ -793,11 +793,11 @@ function showDashboard(): never {
     <?php if ($counts['total'] > 0): ?>
     <div class="status-summary">
         <span class="ss-item"><?=$counts['total']?> server<?=$counts['total']!==1?'s':''?></span>
-        <span class="ss-item ss-online"><?=$counts['online']?> online</span>
-        <?php if ($counts['offline']): ?><span class="ss-item ss-offline"><?=$counts['offline']?> offline</span><?php endif; ?>
-        <?php if ($counts['crit']): ?><span class="ss-item ss-crit"><?=$counts['crit']?> critical</span><?php endif; ?>
-        <?php if ($counts['warn']): ?><span class="ss-item ss-warn"><?=$counts['warn']?> warning</span><?php endif; ?>
-        <?php if ($counts['stale']): ?><span class="ss-item ss-stale"><?=$counts['stale']?> stale</span><?php endif; ?>
+        <span class="ss-item ss-online ss-filter" data-filter="online"><?=$counts['online']?> online</span>
+        <?php if ($counts['offline']): ?><span class="ss-item ss-offline ss-filter" data-filter="offline"><?=$counts['offline']?> offline</span><?php endif; ?>
+        <?php if ($counts['crit']): ?><span class="ss-item ss-crit ss-filter" data-filter="crit"><?=$counts['crit']?> critical</span><?php endif; ?>
+        <?php if ($counts['warn']): ?><span class="ss-item ss-warn ss-filter" data-filter="warn"><?=$counts['warn']?> warning</span><?php endif; ?>
+        <?php if ($counts['stale']): ?><span class="ss-item ss-stale ss-filter" data-filter="stale"><?=$counts['stale']?> stale</span><?php endif; ?>
     </div>
     <?php endif; ?>
 
@@ -814,7 +814,7 @@ function showDashboard(): never {
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
         ?>
-        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" draggable="true">
+        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
                 <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname" <?php if(!empty($srv['notes'])):?>title="<?=e($srv['notes'])?>"<?php endif;?>><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
@@ -1133,6 +1133,10 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .ss-item:first-child{color:var(--text);font-weight:600;padding-right:.5rem;border-right:1px solid var(--card-border);margin-right:.15rem}
 .ss-online{color:var(--green)} .ss-offline{color:var(--red)}
 .ss-crit{color:#fff;background:var(--red)} .ss-warn{color:#000;background:var(--amber)} .ss-stale{color:var(--slate);border:1px solid var(--slate)}
+.ss-filter{cursor:pointer;transition:opacity .15s,transform .15s;user-select:none}
+.ss-filter:hover{transform:scale(1.05)}
+.ss-filter.active{outline:2px solid var(--text);outline-offset:2px}
+.card.filtered-out{display:none}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;margin:1.25rem 0}
 .card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;transition:box-shadow .15s,opacity .15s}
@@ -1258,6 +1262,23 @@ function updThemeBtn(){document.getElementById('themeBtn').textContent=document.
 updThemeBtn();
 function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id).textContent).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500)})}
 
+/* Status filter */
+(function(){
+    var filters=document.querySelectorAll('.ss-filter');
+    if(!filters.length)return;
+    var active=null;
+    filters.forEach(function(f){
+        f.addEventListener('click',function(){
+            var filter=f.dataset.filter;
+            if(active===filter){active=null;f.classList.remove('active')}
+            else{filters.forEach(function(x){x.classList.remove('active')});f.classList.add('active');active=filter}
+            document.querySelectorAll('.card[data-status]').forEach(function(c){
+                if(!active||c.dataset.status===active)c.classList.remove('filtered-out');
+                else c.classList.add('filtered-out');
+            });
+        });
+    });
+})();
 /* Drag & drop */
 (function(){
     var grid=document.getElementById('serverGrid');if(!grid)return;
