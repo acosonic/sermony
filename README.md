@@ -80,6 +80,7 @@ That's it. Servers appear on the dashboard automatically.
 - Configurable alert thresholds (CPU, memory, disk, mail queue)
 - Email and webhook notifications with configurable cooldown
 - Status badges: CRITICAL, WARNING, STALE, OFFLINE
+- Custom display names per server (hostname shown in detail metadata)
 - Custom notes per server
 - Export metrics as CSV
 - Server detail page with metrics history (responsive on mobile)

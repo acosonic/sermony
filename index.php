@@ -61,6 +61,7 @@ function db(): SQLite3 {
     @$i->exec('ALTER TABLE servers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     @$i->exec('ALTER TABLE servers ADD COLUMN interval_minutes INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN notes TEXT DEFAULT ""');
+    @$i->exec('ALTER TABLE servers ADD COLUMN display_name TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_warn INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_crit INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_mem_warn INTEGER');
@@ -98,7 +99,7 @@ function migrate(SQLite3 $db): void {
         public_ip TEXT, fqdn TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         last_seen_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
-        interval_minutes INTEGER, notes TEXT DEFAULT "",
+        interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT,
         alert_cpu_warn INTEGER, alert_cpu_crit INTEGER,
         alert_mem_warn INTEGER, alert_mem_crit INTEGER,
         alert_disk_warn INTEGER, alert_disk_crit INTEGER,
@@ -640,10 +641,12 @@ function handleUpdateServer(): never {
     $id = (int)($_POST['id'] ?? 0);
     if ($id < 1) { header('Location: ?'); exit; }
     $d = db();
-    $s = $d->prepare('UPDATE servers SET interval_minutes=:int, notes=:notes,
+    $s = $d->prepare('UPDATE servers SET display_name=:dn, interval_minutes=:int, notes=:notes,
         alert_cpu_warn=:cw, alert_cpu_crit=:cc, alert_mem_warn=:mw, alert_mem_crit=:mc,
         alert_disk_warn=:dw, alert_disk_crit=:dc, alert_mail_warn=:qw, alert_mail_crit=:qc WHERE id=:id');
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
+    $dn = trim((string)($_POST['display_name'] ?? ''));
+    $s->bindValue(':dn', $dn !== '' ? $dn : null);
     $intVal = $_POST['interval_minutes'] ?? '';
     $s->bindValue(':int', $intVal !== '' ? max(1, (int)$intVal) : null);
     $s->bindValue(':notes', (string)($_POST['notes'] ?? ''), SQLITE3_TEXT);
@@ -798,13 +801,13 @@ function showDashboard(): never {
         <div class="<?=$cls?>" data-id="<?=$srv['id']?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
-                <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname"><?=e($srv['hostname'])?></a>
+                <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname"><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
                 <?php if (!$on): ?><span class="badge badge-off">OFFLINE</span>
                 <?php elseif ($health==='crit'): ?><span class="badge badge-crit">CRITICAL</span>
                 <?php elseif ($health==='warn'): ?><span class="badge badge-warn">WARNING</span>
                 <?php elseif ($stale): ?><span class="badge badge-stale">STALE</span>
                 <?php endif; ?>
-                <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
+                <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['display_name'] ?: $srv['hostname'])?> and all its metrics?')">
                     <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
@@ -846,15 +849,16 @@ function showServer(): never {
     $res = $s->execute(); $metrics = [];
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) $metrics[] = $row;
 
-    pageTop(e($srv['hostname']));
+    pageTop(e($srv['display_name'] ?: $srv['hostname']));
     ?>
     <div class="detail-header">
         <a href="?" class="back">&larr; Dashboard</a>
         <div class="detail-title">
             <span class="dot <?=$on ? 'dot-on' : 'dot-off'?>"></span>
-            <h1><?=e($srv['hostname'])?></h1>
+            <h1><?=e($srv['display_name'] ?: $srv['hostname'])?></h1>
         </div>
         <div class="detail-meta">
+            <span><strong>Hostname:</strong> <?=e($srv['hostname'])?></span>
             <span><strong>IP:</strong> <?=e($srv['public_ip'] ?: "\xE2\x80\x94")?></span>
             <span><strong>FQDN:</strong> <?=e($srv['fqdn'] ?: "\xE2\x80\x94")?></span>
             <span><strong>Status:</strong> <?=$on ? 'Online' : 'Offline'?></span>
@@ -867,10 +871,12 @@ function showServer(): never {
             <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
             <div class="server-settings">
                 <div class="field-row">
+                    <label>Display Name
+                        <input type="text" name="display_name" value="<?=e($srv['display_name'] ?? '')?>" placeholder="<?=e($srv['hostname'])?>">
+                    </label>
                     <label>Interval (min)
                         <input type="number" name="interval_minutes" value="<?=e($srv['interval_minutes'] ?? '')?>" placeholder="<?=e(setting('interval_minutes')??'15')?>" min="1" max="1440">
                     </label>
-                    <label>&nbsp;</label>
                 </div>
                 <label>Notes
                     <textarea name="notes" rows="3" placeholder="Add notes about this server..."><?=e($srv['notes'] ?? '')?></textarea>
@@ -904,7 +910,7 @@ function showServer(): never {
                 <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
                 <button type="submit" class="btn-secondary" style="color:var(--amber)">Rotate Agent Key</button>
             </form>
-            <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
+            <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['display_name'] ?: $srv['hostname'])?> and all its metrics?')">
                 <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
                 <button type="submit" class="btn-danger">Delete Server</button>
             </form>
