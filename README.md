@@ -1,6 +1,6 @@
 # Sermony
 
-Simple, self-hosted server monitoring. One PHP file, one SQLite database, one Bash agent.
+**Ser**ver **Mon**itoring Harmon**y** — simple, self-hosted server monitoring. One PHP file, one SQLite database, one Bash agent.
 
 This is a **pet project** — built for personal use to monitor Ubuntu servers. It's intentionally minimal: no frameworks, no build steps, no dependencies beyond what's already on a standard LAMP stack. If you find it useful or want to improve it, contributions are welcome.
 
@@ -27,6 +27,8 @@ This is a **pet project** — built for personal use to monitor Ubuntu servers. 
 ## What it does
 
 A central PHP web app receives metrics from remote Ubuntu/Linux servers via lightweight Bash agents. Each server gets its own card on a dashboard showing CPU, memory, disk, IOPS, network, mail queue, and load averages — with configurable warning/critical thresholds.
+
+Servers are automatically sorted by severity — critical and warning servers float to the top. Servers that stop reporting are detected as **stale** (missed check-ins) and then **offline**, both with visual indicators.
 
 ## Requirements
 
@@ -63,15 +65,16 @@ That's it. Servers appear on the dashboard automatically.
 
 ## Features
 
-- Dark/light theme (follows OS preference, manual toggle available)
+- Dark/light theme (follows OS preference, manual toggle)
 - Drag-and-drop card reordering (persisted)
-- Servers with issues automatically float to the top
+- Auto-sort by severity: critical > warning > stale > offline > healthy
+- Stale detection — servers that miss expected check-ins get flagged before going offline
 - Per-server configurable check intervals
 - Configurable alert thresholds (CPU, memory, disk, mail queue)
-- Status badges: CRITICAL, WARNING, OFFLINE
+- Status badges: CRITICAL, WARNING, STALE, OFFLINE
 - Server detail page with metrics history
 - Settings page for enrollment, intervals, retention, and alert thresholds
-- Enrollment key rotation with old key management
+- Enrollment key rotation — old keys stay active until explicitly invalidated
 - Secure enrollment flow (unique per-agent keys)
 - Graceful degradation when agent tools are missing
 - Automatic metric retention cleanup

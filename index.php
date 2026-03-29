@@ -156,6 +156,15 @@ function isOnline(?string $t, ?int $serverInterval = null): bool {
     return (time() - strtotime($t)) < ($int * OFFLINE_MULT * 60);
 }
 
+/** Server is "stale" if online but missed at least one expected check-in (>1.5x interval) */
+function isStale(?string $t, ?int $serverInterval = null): bool {
+    if (!$t) return false;
+    $int = $serverInterval ?? (int)(setting('interval_minutes') ?? 15);
+    $elapsed = time() - strtotime($t);
+    $threshold = $int * 60;
+    return $elapsed >= ($threshold * 1.5) && $elapsed < ($threshold * OFFLINE_MULT);
+}
+
 function mColor(float $v): string {
     $crit = (float)(setting('alert_cpu_crit') ?? 90);
     $warn = (float)(setting('alert_cpu_warn') ?? 75);
@@ -445,14 +454,16 @@ function showDashboard(): never {
         $servers[] = $row;
     }
 
-    // Compute health + online for each server, then sort: issues first
-    $counts = ['total' => count($servers), 'online' => 0, 'offline' => 0, 'crit' => 0, 'warn' => 0];
+    // Compute health + online + stale for each server, then sort: issues first
+    $counts = ['total' => count($servers), 'online' => 0, 'offline' => 0, 'crit' => 0, 'warn' => 0, 'stale' => 0];
     $hasCustomOrder = false;
     foreach ($servers as &$srv) {
         $srvInt = $srv['interval_minutes'] !== null ? (int)$srv['interval_minutes'] : null;
         $srv['_online'] = isOnline($srv['last_seen_at'], $srvInt);
+        $srv['_stale'] = $srv['_online'] && isStale($srv['last_seen_at'], $srvInt);
         $srv['_health'] = serverHealth($srv);
         if ($srv['_online']) $counts['online']++; else $counts['offline']++;
+        if ($srv['_stale']) $counts['stale']++;
         if ($srv['_health'] === 'crit') $counts['crit']++;
         elseif ($srv['_health'] === 'warn') $counts['warn']++;
         if ((int)$srv['sort_order'] !== 0) $hasCustomOrder = true;
@@ -460,11 +471,20 @@ function showDashboard(): never {
     unset($srv);
 
     // Auto-sort by severity if no custom drag-drop order has been set
+    // Order: crit > warn > stale > offline > ok
     if (!$hasCustomOrder) {
         usort($servers, function ($a, $b) {
-            $pri = ['crit' => 0, 'warn' => 1, 'ok' => 3];
-            $pa = $a['_online'] ? ($pri[$a['_health']] ?? 3) : 2;
-            $pb = $b['_online'] ? ($pri[$b['_health']] ?? 3) : 2;
+            $pri = ['crit' => 0, 'warn' => 1, 'ok' => 5];
+            if ($a['_online']) {
+                $pa = $a['_stale'] ? 2 : ($pri[$a['_health']] ?? 5);
+            } else {
+                $pa = 3;
+            }
+            if ($b['_online']) {
+                $pb = $b['_stale'] ? 2 : ($pri[$b['_health']] ?? 5);
+            } else {
+                $pb = 3;
+            }
             return $pa !== $pb ? $pa - $pb : strcmp($a['hostname'], $b['hostname']);
         });
     }
@@ -478,6 +498,7 @@ function showDashboard(): never {
         <?php if ($counts['offline']): ?><span class="ss-item ss-offline"><?=$counts['offline']?> offline</span><?php endif; ?>
         <?php if ($counts['crit']): ?><span class="ss-item ss-crit"><?=$counts['crit']?> critical</span><?php endif; ?>
         <?php if ($counts['warn']): ?><span class="ss-item ss-warn"><?=$counts['warn']?> warning</span><?php endif; ?>
+        <?php if ($counts['stale']): ?><span class="ss-item ss-stale"><?=$counts['stale']?> stale</span><?php endif; ?>
     </div>
     <?php endif; ?>
 
@@ -494,18 +515,21 @@ function showDashboard(): never {
             $cpu  = $srv['cpu_usage'];
             $mem  = $srv['memory_usage'];
             $disk = $srv['disk_usage'];
+            $stale = $srv['_stale'];
             $cardClass = 'card';
             if (!$on) $cardClass .= ' card-offline';
             elseif ($health === 'crit') $cardClass .= ' card-crit';
             elseif ($health === 'warn') $cardClass .= ' card-warn';
+            elseif ($stale) $cardClass .= ' card-stale';
         ?>
         <div class="<?=$cardClass?>" data-id="<?=$srv['id']?>" draggable="true">
             <div class="card-head">
-                <span class="dot <?=$on ? 'dot-on' : 'dot-off'?>"></span>
+                <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
                 <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname"><?=e($srv['hostname'])?></a>
                 <?php if (!$on): ?><span class="badge badge-off">OFFLINE</span>
                 <?php elseif ($health === 'crit'): ?><span class="badge badge-crit">CRITICAL</span>
                 <?php elseif ($health === 'warn'): ?><span class="badge badge-warn">WARNING</span>
+                <?php elseif ($stale): ?><span class="badge badge-stale">STALE</span>
                 <?php endif; ?>
                 <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
                     <input type="hidden" name="id" value="<?=$srv['id']?>">
@@ -554,7 +578,7 @@ function showDashboard(): never {
                 </div>
             </div>
             <div class="card-foot">
-                <?=$on ? 'Online' : 'Offline'?> &middot; <?=timeAgo($srv['last_seen_at'])?>
+                <?=$on ? ($stale ? 'Stale' : 'Online') : 'Offline'?> &middot; <?=timeAgo($srv['last_seen_at'])?>
             </div>
         </div>
         <?php endforeach; ?>
@@ -798,7 +822,7 @@ function pageTop(string $title): void {
     --code-bg:#f1f5f9;
     --input-bg:#fff; --input-border:#d1d5db;
     --table-head:#f8fafc; --table-border:#e5e7eb; --table-row-border:#f3f4f6; --table-hover:#f8fafc;
-    --green:#22c55e; --amber:#f59e0b; --red:#ef4444;
+    --green:#22c55e; --amber:#f59e0b; --red:#ef4444; --slate:#6b7280;
     --blue:#3b82f6; --blue-hover:#2563eb;
     --foot-border:#f3f4f6;
 }
@@ -809,7 +833,7 @@ function pageTop(string $title): void {
     --code-bg:#334155;
     --input-bg:#1e293b; --input-border:#475569;
     --table-head:#1e293b; --table-border:#334155; --table-row-border:#1e293b; --table-hover:#334155;
-    --green:#4ade80; --amber:#fbbf24; --red:#f87171;
+    --green:#4ade80; --amber:#fbbf24; --red:#f87171; --slate:#94a3b8;
     --blue:#60a5fa; --blue-hover:#3b82f6;
     --foot-border:#1e293b;
 }
@@ -837,6 +861,7 @@ header h1 span{color:#60a5fa}
 .ss-offline{color:var(--red)}
 .ss-crit{color:#fff;background:var(--red);border-radius:10px}
 .ss-warn{color:#000;background:var(--amber);border-radius:10px}
+.ss-stale{color:var(--slate);border:1px solid var(--slate)}
 
 /* ── Setup Bar ── */
 .setup-bar{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;margin:1.25rem 0;font-size:.85rem;display:flex;flex-direction:column;gap:.5rem}
@@ -856,6 +881,7 @@ header h1 span{color:#60a5fa}
 .card-offline{border-left:3px solid var(--red)}
 .card-crit{border-left:3px solid var(--red);background:color-mix(in srgb, var(--red) 5%, var(--card))}
 .card-warn{border-left:3px solid var(--amber);background:color-mix(in srgb, var(--amber) 5%, var(--card))}
+.card-stale{border-left:3px solid var(--slate);background:color-mix(in srgb, var(--slate) 5%, var(--card))}
 .card-head{display:flex;align-items:center;gap:.5rem;margin-bottom:.25rem}
 .card-hostname{font-weight:600;font-size:1rem;color:var(--text);text-decoration:none;flex:1}
 .card-hostname:hover{color:var(--blue)}
@@ -867,12 +893,15 @@ header h1 span{color:#60a5fa}
 .badge-off{background:var(--red);color:#fff}
 .badge-crit{background:var(--red);color:#fff;animation:pulse-badge 2s ease-in-out infinite}
 .badge-warn{background:var(--amber);color:#000}
+.badge-stale{background:var(--slate);color:#fff}
 @keyframes pulse-badge{0%,100%{opacity:1}50%{opacity:.6}}
 
 /* ── Dots ── */
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex-shrink:0}
 .dot-on{background:var(--green);box-shadow:0 0 0 3px color-mix(in srgb, var(--green) 20%, transparent)}
+.dot-stale{background:var(--slate);box-shadow:0 0 0 3px color-mix(in srgb, var(--slate) 20%, transparent);animation:pulse-dot 2s ease-in-out infinite}
 .dot-off{background:var(--red);box-shadow:0 0 0 3px color-mix(in srgb, var(--red) 20%, transparent)}
+@keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
 
 .btn-del{background:none;border:none;color:var(--subtle);font-size:1.2rem;cursor:pointer;padding:0 .3rem;line-height:1}
 .btn-del:hover{color:var(--red)}
