@@ -817,7 +817,7 @@ function showDashboard(): never {
         <div class="<?=$cls?>" data-id="<?=$srv['id']?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
-                <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname"><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
+                <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname" <?php if(!empty($srv['notes'])):?>title="<?=e($srv['notes'])?>"<?php endif;?>><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
                 <?php if (!$on): ?><span class="badge badge-off">OFFLINE</span>
                 <?php elseif ($health==='crit'): ?><span class="badge badge-crit">CRITICAL</span>
                 <?php elseif ($health==='warn'): ?><span class="badge badge-warn">WARNING</span>
