@@ -6,6 +6,9 @@ This is a **pet project** — built for personal use to monitor Ubuntu servers. 
 
 ## Screenshots
 
+### Login
+![Login](screenshots/login.png)
+
 ### Dashboard (light)
 ![Dashboard Light](screenshots/dashboard-light.png)
 
@@ -46,7 +49,7 @@ Copy `index.php`, `install.sh`, and `sermony-agent.sh` to a PHP-enabled web dire
 cp index.php install.sh sermony-agent.sh /var/www/sermony/
 ```
 
-Visit the URL in your browser. The database is created automatically.
+Visit the URL — you'll be prompted to set an admin password. The database is created automatically.
 
 ### 2. Add servers to monitor
 
@@ -65,16 +68,23 @@ That's it. Servers appear on the dashboard automatically.
 
 ## Features
 
+- Password-protected dashboard with session-based auth
 - Dark/light theme (follows OS preference, manual toggle)
+- Sparkline charts on server detail page (CPU/memory/disk trends)
+- Auto-refresh dashboard without full page reload
+- Browser notifications when servers go critical/offline/recover
 - Drag-and-drop card reordering (persisted)
 - Auto-sort by severity: critical > warning > stale > offline > healthy
 - Stale detection — servers that miss expected check-ins get flagged before going offline
-- Per-server configurable check intervals
+- Per-server configurable check intervals and alert thresholds
 - Configurable alert thresholds (CPU, memory, disk, mail queue)
+- Email and webhook notifications with configurable cooldown
 - Status badges: CRITICAL, WARNING, STALE, OFFLINE
-- Server detail page with metrics history
-- Settings page for enrollment, intervals, retention, and alert thresholds
-- Enrollment key rotation — old keys stay active until explicitly invalidated
+- Custom notes per server
+- Export metrics as CSV
+- Server detail page with metrics history (responsive on mobile)
+- Enrollment key rotation with old key management
+- Agent key rotation per server
 - Secure enrollment flow (unique per-agent keys)
 - Graceful degradation when agent tools are missing
 - Automatic metric retention cleanup
@@ -90,12 +100,20 @@ That's it. Servers appear on the dashboard automatically.
 
 ## Security
 
+- Password-protected dashboard (bcrypt, session-based)
+- CSRF protection on all POST forms and JSON endpoints
+- Login rate limiting (5 attempts, 15-minute lockout)
+- Secure session cookies (SameSite=Strict, HttpOnly, Secure over HTTPS)
+- 8-hour session timeout
+- Content-Security-Policy header
 - Prepared statements for all SQL
-- `hash_equals()` for enrollment key comparison
-- Unique 64-char hex agent key per server
+- `hash_equals()` for enrollment key and CSRF comparison
+- Unique 64-char hex agent key per server (rotatable)
 - Enrollment key rotation — old keys stay active until explicitly invalidated
+- Login audit log (IP, timestamp, success/fail)
+- Optional API IP allowlist for enroll/ingest endpoints
+- Auto-generated `.htaccess` to block direct database file access
 - Agent config stored chmod 600
-- No built-in dashboard auth — secure at web server level (`.htaccess`, `auth_basic`, Cloudflare Access, etc.)
 
 ## Uninstall agent
 

@@ -1,0 +1,3 @@
+<FilesMatch "\.(db|db-wal|db-shm)$">
+    Require all denied
+</FilesMatch>

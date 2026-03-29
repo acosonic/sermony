@@ -12,10 +12,15 @@ const OFFLINE_MULT = 2.5;
 const HISTORY      = 200;
 const SPARK_POINTS = 10;
 
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES    = 15;
+const SESSION_LIFETIME   = 28800; // 8 hours
+
 const DEFAULTS = [
     'enrollment_key'       => '',
     'interval_minutes'     => '15',
     'retention_days'       => '30',
+    'api_ip_allowlist'     => '',  // comma-separated, empty = allow all
     'alert_cpu_warn'       => '75',
     'alert_cpu_crit'       => '90',
     'alert_mem_warn'       => '75',
@@ -56,6 +61,14 @@ function db(): SQLite3 {
     @$i->exec('ALTER TABLE servers ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
     @$i->exec('ALTER TABLE servers ADD COLUMN interval_minutes INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN notes TEXT DEFAULT ""');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_warn INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_crit INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_mem_warn INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_mem_crit INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_disk_warn INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_disk_crit INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_mail_warn INTEGER');
+    @$i->exec('ALTER TABLE servers ADD COLUMN alert_mail_crit INTEGER');
     @$i->exec('CREATE TABLE IF NOT EXISTS alert_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -63,6 +76,17 @@ function db(): SQLite3 {
         sent_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         channel TEXT NOT NULL
     )');
+    @$i->exec('CREATE TABLE IF NOT EXISTS login_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL,
+        success INTEGER NOT NULL DEFAULT 0,
+        attempted_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\'))
+    )');
+    // Block direct access to .db files
+    $ht = dirname(DB_FILE) . '/.htaccess';
+    if (!file_exists($ht)) {
+        @file_put_contents($ht, "<FilesMatch \"\\.(db|db-wal|db-shm)$\">\n    Require all denied\n</FilesMatch>\n");
+    }
     return $i;
 }
 
@@ -74,7 +98,11 @@ function migrate(SQLite3 $db): void {
         public_ip TEXT, fqdn TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         last_seen_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
-        interval_minutes INTEGER, notes TEXT DEFAULT ""
+        interval_minutes INTEGER, notes TEXT DEFAULT "",
+        alert_cpu_warn INTEGER, alert_cpu_crit INTEGER,
+        alert_mem_warn INTEGER, alert_mem_crit INTEGER,
+        alert_disk_warn INTEGER, alert_disk_crit INTEGER,
+        alert_mail_warn INTEGER, alert_mail_crit INTEGER
     )');
     $db->exec('CREATE TABLE metrics (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +120,11 @@ function migrate(SQLite3 $db): void {
         alert_type TEXT NOT NULL,
         sent_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         channel TEXT NOT NULL
+    )');
+    $db->exec('CREATE TABLE login_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ip TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0,
+        attempted_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\'))
     )');
     $s = $db->prepare('INSERT INTO settings (key, value) VALUES (:k, :v)');
     foreach (DEFAULTS as $k => $v) {
@@ -149,18 +182,26 @@ function isStale(?string $t, ?int $si = null): bool {
     return $elapsed >= ($th * 1.5) && $elapsed < ($th * OFFLINE_MULT);
 }
 
-function mColorFor(string $type, float $v): string {
-    $crit = (float)(setting("alert_{$type}_crit") ?? 90);
-    $warn = (float)(setting("alert_{$type}_warn") ?? 75);
-    if ($v >= $crit) return 'var(--red)'; if ($v >= $warn) return 'var(--amber)'; return 'var(--green)';
+/** Get threshold for a metric type, with optional per-server override */
+function threshold(string $type, string $level, ?array $srv = null): float {
+    if ($srv && isset($srv["alert_{$type}_{$level}"]) && $srv["alert_{$type}_{$level}"] !== null) {
+        return (float)$srv["alert_{$type}_{$level}"];
+    }
+    return (float)(setting("alert_{$type}_{$level}") ?? ($level === 'crit' ? 90 : 75));
+}
+
+function mColorFor(string $type, float $v, ?array $srv = null): string {
+    if ($v >= threshold($type, 'crit', $srv)) return 'var(--red)';
+    if ($v >= threshold($type, 'warn', $srv)) return 'var(--amber)';
+    return 'var(--green)';
 }
 
 function serverHealth(array $srv): string {
     $dom = 'ok';
     foreach (['cpu'=>'cpu_usage','mem'=>'memory_usage','disk'=>'disk_usage','mail'=>'mail_queue'] as $type=>$col) {
         if ($srv[$col] === null) continue; $v = (float)$srv[$col];
-        if ($v >= (float)(setting("alert_{$type}_crit") ?? 90)) return 'crit';
-        if ($v >= (float)(setting("alert_{$type}_warn") ?? 50)) $dom = 'warn';
+        if ($v >= threshold($type, 'crit', $srv)) return 'crit';
+        if ($v >= threshold($type, 'warn', $srv)) $dom = 'warn';
     }
     return $dom;
 }
@@ -188,7 +229,7 @@ function getSparkData(array $serverIds): array {
 }
 
 /** Render an inline SVG sparkline bar chart */
-function sparkSvg(array $values, string $type): string {
+function sparkSvg(array $values, string $type, ?array $srv = null): string {
     $n = count($values); if ($n === 0) return '';
     $w = 80; $h = 24; $gap = 1;
     $bw = max(1, ($w - ($n - 1) * $gap) / $n);
@@ -198,8 +239,8 @@ function sparkSvg(array $values, string $type): string {
         $bh = max(1, $val / 100 * $h);
         $x = round($i * ($bw + $gap), 1);
         $y = round($h - $bh, 1);
-        $col = $val >= (float)(setting("alert_{$type}_crit") ?? 90) ? 'var(--red)' :
-              ($val >= (float)(setting("alert_{$type}_warn") ?? 75) ? 'var(--amber)' : 'var(--green)');
+        $col = $val >= threshold($type, 'crit', $srv) ? 'var(--red)' :
+              ($val >= threshold($type, 'warn', $srv) ? 'var(--amber)' : 'var(--green)');
         $bars .= "<rect x=\"$x\" y=\"$y\" width=\"" . round($bw, 1) . "\" height=\"$bh\" fill=\"$col\" rx=\"1\"/>";
     }
     return "<svg class=\"spark\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\">$bars</svg>";
@@ -246,38 +287,222 @@ function sendAlerts(int $serverId, string $hostname, string $alertType, string $
     }
 }
 
-function checkAlerts(int $serverId, string $hostname, array $metrics): void {
+function checkAlerts(int $serverId, string $hostname, array $metrics, ?array $srv = null): void {
     foreach (['cpu'=>'cpu_usage','mem'=>'memory_usage','disk'=>'disk_usage','mail'=>'mail_queue'] as $type=>$col) {
         if (!isset($metrics[$col])) continue;
         $v = (float)$metrics[$col];
-        $crit = (float)(setting("alert_{$type}_crit") ?? 90);
+        $crit = threshold($type, 'crit', $srv);
         if ($v >= $crit) {
             sendAlerts($serverId, $hostname, "{$type}_crit", "$hostname: $col at $v% (threshold: $crit%)");
         }
     }
 }
 
+// ─── Auth ────────────────────────────────────────────────────
+
+$isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+session_set_cookie_params([
+    'lifetime' => SESSION_LIFETIME,
+    'path'     => '/',
+    'secure'   => $isHttps,
+    'httponly'  => true,
+    'samesite'  => 'Strict',
+]);
+session_start();
+
+function isLoggedIn(): bool {
+    if (empty($_SESSION['sermony_auth'])) return false;
+    // Session timeout
+    if (isset($_SESSION['sermony_last_active']) && (time() - $_SESSION['sermony_last_active']) > SESSION_LIFETIME) {
+        $_SESSION = [];
+        return false;
+    }
+    $_SESSION['sermony_last_active'] = time();
+    return true;
+}
+
+function requireAuth(): void {
+    $pw = setting('admin_password_hash');
+    if (!$pw || $pw === '') return;
+    if (isLoggedIn()) return;
+    showLogin(); exit;
+}
+
+function csrfToken(): string {
+    if (empty($_SESSION['csrf_token'])) $_SESSION['csrf_token'] = bin2hex(random_bytes(16));
+    return $_SESSION['csrf_token'];
+}
+
+function csrfField(): string {
+    return '<input type="hidden" name="_csrf" value="' . csrfToken() . '">';
+}
+
+function verifyCsrf(): void {
+    $token = $_POST['_csrf'] ?? '';
+    if (!$token || !hash_equals(csrfToken(), $token)) {
+        http_response_code(403);
+        die('Invalid or missing CSRF token. <a href="?">Go back</a>');
+    }
+}
+
+function clientIp(): string {
+    return $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+}
+
+function isLoginLocked(): bool {
+    $ip = clientIp();
+    $s = db()->prepare("SELECT COUNT(*) as c FROM login_log WHERE ip=:ip AND success=0 AND attempted_at > strftime('%Y-%m-%dT%H:%M:%SZ','now',:mins)");
+    $s->bindValue(':ip', $ip, SQLITE3_TEXT);
+    $s->bindValue(':mins', '-' . LOCKOUT_MINUTES . ' minutes', SQLITE3_TEXT);
+    return (int)$s->execute()->fetchArray()['c'] >= MAX_LOGIN_ATTEMPTS;
+}
+
+function logLoginAttempt(bool $success): void {
+    $s = db()->prepare('INSERT INTO login_log (ip, success) VALUES (:ip, :ok)');
+    $s->bindValue(':ip', clientIp(), SQLITE3_TEXT);
+    $s->bindValue(':ok', $success ? 1 : 0, SQLITE3_INTEGER);
+    $s->execute();
+}
+
+function checkApiIpAllowlist(): void {
+    $list = trim(setting('api_ip_allowlist') ?? '');
+    if ($list === '') return;
+    $allowed = array_map('trim', explode(',', $list));
+    $ip = clientIp();
+    foreach ($allowed as $a) { if ($a === $ip) return; }
+    jsonErr('IP not allowed', 403);
+}
+
 // ─── Router ──────────────────────────────────────────────────
 
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
+header("Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
 
 $action = $_GET['action'] ?? 'dashboard';
 
+// Public routes (API + scripts) — no auth required
 match ($action) {
-    'enroll'         => handleEnroll(),
-    'ingest'         => handleIngest(),
+    'enroll'         => (function(){ checkApiIpAllowlist(); handleEnroll(); })(),
+    'ingest'         => (function(){ checkApiIpAllowlist(); handleIngest(); })(),
+    'install-script' => serveScript('install.sh'),
+    'agent-script'   => serveScript('sermony-agent.sh'),
+    default          => null,
+};
+
+// Auth routes
+if ($action === 'login') { handleLogin(); }
+if ($action === 'logout') { handleLogout(); }
+if ($action === 'setup-password') { handleSetupPassword(); }
+
+// First-run: if no password set, force setup
+$pwHash = setting('admin_password_hash');
+if (!$pwHash || $pwHash === '') {
+    if ($action !== 'setup-password') { showSetupPassword(); exit; }
+}
+
+// All remaining routes require login
+requireAuth();
+
+match ($action) {
     'delete'         => handleDelete(),
     'reorder'        => handleReorder(),
     'update-server'  => handleUpdateServer(),
+    'rotate-agent-key' => handleRotateAgentKey(),
     'dashboard-json' => handleDashboardJson(),
     'export-csv'     => handleExportCsv(),
     'settings'       => ($_SERVER['REQUEST_METHOD'] === 'POST' ? handleSettings() : showSettings()),
     'server'         => showServer(),
-    'install-script' => serveScript('install.sh'),
-    'agent-script'   => serveScript('sermony-agent.sh'),
     default          => showDashboard(),
 };
+
+// ─── Auth Handlers ───────────────────────────────────────────
+
+function handleLogin(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { showLogin(); exit; }
+    verifyCsrf();
+    if (isLoginLocked()) {
+        showLogin('Too many failed attempts. Try again in ' . LOCKOUT_MINUTES . ' minutes.'); exit;
+    }
+    $pw = $_POST['password'] ?? '';
+    $hash = setting('admin_password_hash');
+    if ($hash && password_verify($pw, $hash)) {
+        logLoginAttempt(true);
+        session_regenerate_id(true);
+        $_SESSION['sermony_auth'] = true;
+        $_SESSION['sermony_last_active'] = time();
+        header('Location: ?'); exit;
+    }
+    logLoginAttempt(false);
+    showLogin('Invalid password.'); exit;
+}
+
+function handleLogout(): never {
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+    }
+    session_destroy();
+    header('Location: ?action=login'); exit;
+}
+
+function handleSetupPassword(): never {
+    $existing = setting('admin_password_hash');
+    if ($existing && $existing !== '' && !isLoggedIn()) { header('Location: ?action=login'); exit; }
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { showSetupPassword(); exit; }
+    verifyCsrf();
+    $pw = $_POST['password'] ?? '';
+    $pw2 = $_POST['password_confirm'] ?? '';
+    if (strlen($pw) < 6) { showSetupPassword('Password must be at least 6 characters.'); exit; }
+    if ($pw !== $pw2) { showSetupPassword('Passwords do not match.'); exit; }
+
+    setSetting('admin_password_hash', password_hash($pw, PASSWORD_BCRYPT));
+    $_SESSION['sermony_auth'] = true;
+    header('Location: ?'); exit;
+}
+
+function showLogin(string $error = ''): never {
+    pageTop('Login');
+    ?>
+    <div class="auth-box">
+        <h2>Sign in to Sermony</h2>
+        <?php if ($error): ?><div class="alert-warn"><?=e($error)?></div><?php endif; ?>
+        <form method="post" action="?action=login">
+            <?=csrfField()?>
+            <label>Password
+                <input type="password" name="password" autofocus required>
+            </label>
+            <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Sign In</button>
+        </form>
+    </div>
+    <?php
+    pageBottom(); exit;
+}
+
+function showSetupPassword(string $error = ''): never {
+    pageTop('Setup');
+    ?>
+    <div class="auth-box">
+        <h2>Set Admin Password</h2>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">This password protects the Sermony dashboard. Set it now to get started.</p>
+        <?php if ($error): ?><div class="alert-warn"><?=e($error)?></div><?php endif; ?>
+        <form method="post" action="?action=setup-password">
+            <?=csrfField()?>
+            <label>Password
+                <input type="password" name="password" minlength="6" autofocus required>
+            </label>
+            <label>Confirm Password
+                <input type="password" name="password_confirm" minlength="6" required>
+            </label>
+            <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Set Password</button>
+        </form>
+    </div>
+    <?php
+    pageBottom(); exit;
+}
 
 // ─── API Handlers ────────────────────────────────────────────
 
@@ -319,7 +544,7 @@ function handleIngest(): never {
     if ($ak === '') jsonErr('Missing agent_key', 401);
 
     $d = db();
-    $s = $d->prepare('SELECT id, hostname FROM servers WHERE agent_key=:k');
+    $s = $d->prepare('SELECT * FROM servers WHERE agent_key=:k');
     $s->bindValue(':k', $ak, SQLITE3_TEXT);
     $srv = $s->execute()->fetchArray(SQLITE3_ASSOC);
     if (!$srv) jsonErr('Unknown agent', 403);
@@ -349,7 +574,7 @@ function handleIngest(): never {
     $s->execute();
 
     // Check alert thresholds
-    checkAlerts($id, $srv['hostname'], $in);
+    checkAlerts($id, $srv['hostname'], $in, $srv);
 
     // Probabilistic cleanup (~2% of requests)
     if (random_int(1, 50) === 1) {
@@ -363,16 +588,18 @@ function handleIngest(): never {
 
 function handleDelete(): never {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?'); exit; }
+    verifyCsrf();
     $id = (int)($_POST['id'] ?? 0);
     if ($id > 0) { $s = db()->prepare('DELETE FROM servers WHERE id=:id'); $s->bindValue(':id', $id, SQLITE3_INTEGER); $s->execute(); }
     header('Location: ?'); exit;
 }
 
 function handleSettings(): never {
+    verifyCsrf();
     $intFields = ['interval_minutes','retention_days','alert_cpu_warn','alert_cpu_crit','alert_mem_warn','alert_mem_crit','alert_disk_warn','alert_disk_crit','alert_mail_warn','alert_mail_crit','alert_cooldown_minutes'];
     foreach ($intFields as $k) { if (isset($_POST[$k])) setSetting($k, (string)max(1, (int)$_POST[$k])); }
     // String settings
-    foreach (['alert_email', 'alert_webhook_url'] as $k) { if (isset($_POST[$k])) setSetting($k, trim((string)$_POST[$k])); }
+    foreach (['alert_email', 'alert_webhook_url', 'api_ip_allowlist'] as $k) { if (isset($_POST[$k])) setSetting($k, trim((string)$_POST[$k])); }
 
     if (!empty($_POST['regenerate_key'])) {
         $old = setting('enrollment_key');
@@ -397,6 +624,9 @@ function handleSettings(): never {
 
 function handleReorder(): never {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') jsonErr('POST required', 405);
+    // CSRF via header for JSON requests
+    $hdrToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+    if (!$hdrToken || !hash_equals(csrfToken(), $hdrToken)) jsonErr('Invalid CSRF token', 403);
     $in = json_decode(file_get_contents('php://input'), true);
     if (!is_array($in)) jsonErr('Invalid JSON');
     $d = db(); $s = $d->prepare('UPDATE servers SET sort_order=:pos WHERE id=:id');
@@ -406,16 +636,37 @@ function handleReorder(): never {
 
 function handleUpdateServer(): never {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?'); exit; }
+    verifyCsrf();
     $id = (int)($_POST['id'] ?? 0);
     if ($id < 1) { header('Location: ?'); exit; }
     $d = db();
-    $s = $d->prepare('UPDATE servers SET interval_minutes=:int, notes=:notes WHERE id=:id');
+    $s = $d->prepare('UPDATE servers SET interval_minutes=:int, notes=:notes,
+        alert_cpu_warn=:cw, alert_cpu_crit=:cc, alert_mem_warn=:mw, alert_mem_crit=:mc,
+        alert_disk_warn=:dw, alert_disk_crit=:dc, alert_mail_warn=:qw, alert_mail_crit=:qc WHERE id=:id');
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
     $intVal = $_POST['interval_minutes'] ?? '';
     $s->bindValue(':int', $intVal !== '' ? max(1, (int)$intVal) : null);
     $s->bindValue(':notes', (string)($_POST['notes'] ?? ''), SQLITE3_TEXT);
+    foreach ([':cw'=>'alert_cpu_warn',':cc'=>'alert_cpu_crit',':mw'=>'alert_mem_warn',':mc'=>'alert_mem_crit',
+              ':dw'=>'alert_disk_warn',':dc'=>'alert_disk_crit',':qw'=>'alert_mail_warn',':qc'=>'alert_mail_crit'] as $bind=>$field) {
+        $val = $_POST[$field] ?? '';
+        $s->bindValue($bind, $val !== '' ? max(1, (int)$val) : null);
+    }
     $s->execute();
     header('Location: ?action=server&id=' . $id . '&saved=1'); exit;
+}
+
+function handleRotateAgentKey(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?'); exit; }
+    verifyCsrf();
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id < 1) { header('Location: ?'); exit; }
+    $newKey = bin2hex(random_bytes(32));
+    $s = db()->prepare('UPDATE servers SET agent_key=:k WHERE id=:id');
+    $s->bindValue(':k', $newKey, SQLITE3_TEXT);
+    $s->bindValue(':id', $id, SQLITE3_INTEGER);
+    $s->execute();
+    header('Location: ?action=server&id=' . $id . '&key_rotated=1'); exit;
 }
 
 function handleExportCsv(): never {
@@ -495,7 +746,6 @@ function showDashboard(): never {
         FROM servers s LEFT JOIN metrics m ON m.id = (SELECT id FROM metrics WHERE server_id = s.id ORDER BY received_at DESC LIMIT 1) ORDER BY s.sort_order, s.hostname');
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) $servers[] = $row;
 
-    $spark = getSparkData(array_column($servers, 'id'));
     $counts = ['total' => count($servers), 'online' => 0, 'offline' => 0, 'crit' => 0, 'warn' => 0, 'stale' => 0];
     $hasCustomOrder = false;
     foreach ($servers as &$srv) {
@@ -544,7 +794,6 @@ function showDashboard(): never {
             elseif ($health==='crit') $cls .= ' card-crit';
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
-            $sp = $spark[$srv['id']] ?? [];
         ?>
         <div class="<?=$cls?>" data-id="<?=$srv['id']?>" draggable="true">
             <div class="card-head">
@@ -556,28 +805,21 @@ function showDashboard(): never {
                 <?php elseif ($stale): ?><span class="badge badge-stale">STALE</span>
                 <?php endif; ?>
                 <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
-                    <input type="hidden" name="id" value="<?=$srv['id']?>">
+                    <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
             </div>
             <div class="card-meta"><?=e($srv['public_ip'] ?: "\xE2\x80\x94")?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?></div>
             <div class="metrics">
-                <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu)?>"></div></div><?php endif;?></div>
-                <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem)?>"></div></div><?php endif;?></div>
-                <div class="m"><span class="ml">Disk</span><span class="mv"><?=$disk!==null ? number_format((float)$disk,1).'%' : "\xE2\x80\x94"?></span><?php if($disk!==null):?><div class="bar"><div style="width:<?=min((float)$disk,100)?>%;background:<?=mColorFor('disk',(float)$disk)?>"></div></div><?php endif;?></div>
+                <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu,$srv)?>"></div></div><?php endif;?></div>
+                <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem,$srv)?>"></div></div><?php endif;?></div>
+                <div class="m"><span class="ml">Disk</span><span class="mv"><?=$disk!==null ? number_format((float)$disk,1).'%' : "\xE2\x80\x94"?></span><?php if($disk!==null):?><div class="bar"><div style="width:<?=min((float)$disk,100)?>%;background:<?=mColorFor('disk',(float)$disk,$srv)?>"></div></div><?php endif;?></div>
                 <div class="m"><span class="ml">IOPS</span><span class="mv"><?=$srv['disk_iops']!==null ? number_format((float)$srv['disk_iops'],0) : "\xE2\x80\x94"?></span></div>
                 <div class="m"><span class="ml">Net &#8595;</span><span class="mv"><?=$srv['network_rx_bps']!==null ? fmtBytes((int)$srv['network_rx_bps']).'/s' : "\xE2\x80\x94"?></span></div>
                 <div class="m"><span class="ml">Net &#8593;</span><span class="mv"><?=$srv['network_tx_bps']!==null ? fmtBytes((int)$srv['network_tx_bps']).'/s' : "\xE2\x80\x94"?></span></div>
-                <div class="m"><span class="ml">Mail Q</span><span class="mv" <?php if($srv['mail_queue']!==null):?>style="color:<?=mColorFor('mail',(float)$srv['mail_queue'])?>"<?php endif;?>><?=$srv['mail_queue']!==null ? (int)$srv['mail_queue'] : "\xE2\x80\x94"?></span></div>
+                <div class="m"><span class="ml">Mail Q</span><span class="mv" <?php if($srv['mail_queue']!==null):?>style="color:<?=mColorFor('mail',(float)$srv['mail_queue'],$srv)?>"<?php endif;?>><?=$srv['mail_queue']!==null ? (int)$srv['mail_queue'] : "\xE2\x80\x94"?></span></div>
                 <div class="m"><span class="ml">Load</span><span class="mv"><?=$srv['load_1']!==null ? number_format((float)$srv['load_1'],2) : "\xE2\x80\x94"?></span></div>
             </div>
-            <?php if (!empty($sp)): ?>
-            <div class="sparklines">
-                <div><span class="spark-label">CPU</span><?=sparkSvg(array_column($sp,'cpu_usage'),'cpu')?></div>
-                <div><span class="spark-label">MEM</span><?=sparkSvg(array_column($sp,'memory_usage'),'mem')?></div>
-                <div><span class="spark-label">DISK</span><?=sparkSvg(array_column($sp,'disk_usage'),'disk')?></div>
-            </div>
-            <?php endif; ?>
             <div class="card-foot"><?=$on ? ($stale ? 'Stale' : 'Online') : 'Offline'?> &middot; <?=timeAgo($srv['last_seen_at'])?></div>
         </div>
         <?php endforeach; ?>
@@ -622,23 +864,48 @@ function showServer(): never {
         </div>
         <?php if (isset($_GET['saved'])): ?><div class="alert-ok" style="margin-top:.5rem">Server settings saved.</div><?php endif; ?>
         <form method="post" action="?action=update-server">
-            <input type="hidden" name="id" value="<?=$srv['id']?>">
+            <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
             <div class="server-settings">
                 <div class="field-row">
                     <label>Interval (min)
                         <input type="number" name="interval_minutes" value="<?=e($srv['interval_minutes'] ?? '')?>" placeholder="<?=e(setting('interval_minutes')??'15')?>" min="1" max="1440">
                     </label>
-                    <label>&nbsp;<br><button type="submit" class="btn-sm">Save</button></label>
+                    <label>&nbsp;</label>
                 </div>
                 <label>Notes
                     <textarea name="notes" rows="3" placeholder="Add notes about this server..."><?=e($srv['notes'] ?? '')?></textarea>
                 </label>
+                <div class="srv-thresholds">
+                    <p class="thresh-hint">Alert thresholds (leave empty to use global defaults)</p>
+                    <div class="settings-grid" style="margin-top:.5rem">
+                        <?php foreach ([
+                            'cpu'  => ['CPU %', 100],
+                            'mem'  => ['Memory %', 100],
+                            'disk' => ['Disk %', 100],
+                            'mail' => ['Mail Queue', 100000],
+                        ] as $type => [$label, $max]): ?>
+                        <fieldset style="margin-top:0">
+                            <legend><?=$label?></legend>
+                            <div class="field-row">
+                                <label>Warn<input type="number" name="alert_<?=$type?>_warn" value="<?=e($srv["alert_{$type}_warn"] ?? '')?>" placeholder="<?=e(setting("alert_{$type}_warn"))?>" min="1" max="<?=$max?>"></label>
+                                <label>Crit<input type="number" name="alert_<?=$type?>_crit" value="<?=e($srv["alert_{$type}_crit"] ?? '')?>" placeholder="<?=e(setting("alert_{$type}_crit"))?>" min="1" max="<?=$max?>"></label>
+                            </div>
+                        </fieldset>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <button type="submit" class="btn-primary" style="margin-top:.75rem">Save Settings</button>
             </div>
         </form>
-        <div style="display:flex;gap:.5rem;margin-top:.75rem">
+        <?php if (isset($_GET['key_rotated'])): ?><div class="alert-warn" style="margin-top:.5rem">Agent key rotated. The agent on this server must be re-enrolled with the new key.</div><?php endif; ?>
+        <div style="display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap">
             <a href="?action=export-csv&id=<?=$srv['id']?>" class="btn-secondary">Export CSV</a>
+            <form method="post" action="?action=rotate-agent-key" onsubmit="return confirm('Rotate agent key for <?=e($srv['hostname'])?>?\n\nThe current agent will stop authenticating until re-enrolled.')">
+                <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
+                <button type="submit" class="btn-secondary" style="color:var(--amber)">Rotate Agent Key</button>
+            </form>
             <form method="post" action="?action=delete" onsubmit="return confirm('Delete <?=e($srv['hostname'])?> and all its metrics?')">
-                <input type="hidden" name="id" value="<?=$srv['id']?>">
+                <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
                 <button type="submit" class="btn-danger">Delete Server</button>
             </form>
         </div>
@@ -647,6 +914,24 @@ function showServer(): never {
     <?php if (empty($metrics)): ?>
     <p class="empty">No metrics recorded yet.</p>
     <?php else: ?>
+    <?php
+        // Sparkline charts from metrics history (last 30 points for more detail)
+        $sparkSlice = array_reverse(array_slice($metrics, 0, 30));
+    ?>
+    <div class="detail-sparks">
+        <div class="detail-spark">
+            <span class="spark-label">CPU %</span>
+            <?=sparkSvg(array_column($sparkSlice, 'cpu_usage'), 'cpu', $srv)?>
+        </div>
+        <div class="detail-spark">
+            <span class="spark-label">Memory %</span>
+            <?=sparkSvg(array_column($sparkSlice, 'memory_usage'), 'mem', $srv)?>
+        </div>
+        <div class="detail-spark">
+            <span class="spark-label">Disk %</span>
+            <?=sparkSvg(array_column($sparkSlice, 'disk_usage'), 'disk', $srv)?>
+        </div>
+    </div>
     <div class="table-wrap">
         <table>
             <thead><tr>
@@ -658,14 +943,14 @@ function showServer(): never {
             <?php foreach ($metrics as $m): ?>
             <tr>
                 <td data-label="Time"><?=e(substr($m['collected_at'],0,16))?></td>
-                <td data-label="CPU %" style="color:<?=$m['cpu_usage']!==null ? mColorFor('cpu',(float)$m['cpu_usage']) : 'var(--muted)'?>"><?=$m['cpu_usage']!==null ? number_format((float)$m['cpu_usage'],1) : "\xE2\x80\x94"?></td>
-                <td data-label="Mem %" style="color:<?=$m['memory_usage']!==null ? mColorFor('mem',(float)$m['memory_usage']) : 'var(--muted)'?>"><?=$m['memory_usage']!==null ? number_format((float)$m['memory_usage'],1) : "\xE2\x80\x94"?></td>
+                <td data-label="CPU %" style="color:<?=$m['cpu_usage']!==null ? mColorFor('cpu',(float)$m['cpu_usage'],$srv) : 'var(--muted)'?>"><?=$m['cpu_usage']!==null ? number_format((float)$m['cpu_usage'],1) : "\xE2\x80\x94"?></td>
+                <td data-label="Mem %" style="color:<?=$m['memory_usage']!==null ? mColorFor('mem',(float)$m['memory_usage'],$srv) : 'var(--muted)'?>"><?=$m['memory_usage']!==null ? number_format((float)$m['memory_usage'],1) : "\xE2\x80\x94"?></td>
                 <td data-label="Mem MB"><?=$m['memory_total_mb']!==null ? number_format((int)$m['memory_total_mb']) : "\xE2\x80\x94"?></td>
-                <td data-label="Disk %" style="color:<?=$m['disk_usage']!==null ? mColorFor('disk',(float)$m['disk_usage']) : 'var(--muted)'?>"><?=$m['disk_usage']!==null ? number_format((float)$m['disk_usage'],1) : "\xE2\x80\x94"?></td>
+                <td data-label="Disk %" style="color:<?=$m['disk_usage']!==null ? mColorFor('disk',(float)$m['disk_usage'],$srv) : 'var(--muted)'?>"><?=$m['disk_usage']!==null ? number_format((float)$m['disk_usage'],1) : "\xE2\x80\x94"?></td>
                 <td data-label="IOPS"><?=$m['disk_iops']!==null ? number_format((float)$m['disk_iops'],0) : "\xE2\x80\x94"?></td>
                 <td data-label="Net RX"><?=$m['network_rx_bps']!==null ? fmtBytes((int)$m['network_rx_bps']).'/s' : "\xE2\x80\x94"?></td>
                 <td data-label="Net TX"><?=$m['network_tx_bps']!==null ? fmtBytes((int)$m['network_tx_bps']).'/s' : "\xE2\x80\x94"?></td>
-                <td data-label="Mail Q" style="color:<?=$m['mail_queue']!==null ? mColorFor('mail',(float)$m['mail_queue']) : 'var(--muted)'?>"><?=$m['mail_queue']!==null ? (int)$m['mail_queue'] : "\xE2\x80\x94"?></td>
+                <td data-label="Mail Q" style="color:<?=$m['mail_queue']!==null ? mColorFor('mail',(float)$m['mail_queue'],$srv) : 'var(--muted)'?>"><?=$m['mail_queue']!==null ? (int)$m['mail_queue'] : "\xE2\x80\x94"?></td>
                 <td data-label="Load"><?=$m['load_1']!==null ? number_format((float)$m['load_1'],2).' / '.number_format((float)$m['load_5'],2).' / '.number_format((float)$m['load_15'],2) : "\xE2\x80\x94"?></td>
             </tr>
             <?php endforeach; ?>
@@ -688,7 +973,8 @@ function showSettings(): never {
         <?php if ($saved): ?><div class="alert-ok">Settings saved.</div><?php endif; ?>
         <?php if (isset($_GET['regenerated'])): ?><div class="alert-warn">Enrollment key regenerated. The previous key is still active below &mdash; invalidate it when you no longer need it.</div><?php endif; ?>
 
-        <form method="post" action="?action=settings">
+        <form method="post" action="?action=settings" id="settings-form">
+            <?=csrfField()?>
             <?php $ekey = setting('enrollment_key'); $url = baseUrl(); $prevKeys = json_decode(setting('previous_keys') ?? '[]', true); ?>
             <fieldset>
                 <legend>Enrollment</legend>
@@ -767,6 +1053,15 @@ function showSettings(): never {
 
             <button type="submit" class="btn-primary" style="margin-top:1.25rem">Save Settings</button>
         </form>
+
+        <fieldset style="margin-top:1.5rem">
+            <legend>Security</legend>
+            <a href="?action=setup-password" class="btn-secondary">Change Password</a>
+            <label style="margin-top:1rem">API IP Allowlist (comma-separated, empty = allow all)
+                <input type="text" name="api_ip_allowlist" value="<?=e(setting('api_ip_allowlist'))?>" placeholder="203.0.113.10, 10.0.1.0/24" form="settings-form">
+            </label>
+            <p style="font-size:.75rem;color:var(--subtle);margin-top:.25rem">Restricts which IPs can call the enroll and ingest endpoints. Leave empty to allow all.</p>
+        </fieldset>
     </div>
     <?php
     pageBottom(); exit;
@@ -850,10 +1145,11 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .bar{height:3px;background:var(--card-border);border-radius:2px;margin-top:2px}
 .bar>div{height:100%;border-radius:2px;transition:width .3s}
 
-.sparklines{display:flex;gap:.75rem;margin-top:.6rem;padding-top:.5rem;border-top:1px solid var(--foot-border)}
-.sparklines>div{flex:1;min-width:0}
-.spark-label{font-size:.6rem;color:var(--subtle);text-transform:uppercase;letter-spacing:.03em;display:block;margin-bottom:2px}
+.spark-label{font-size:.65rem;color:var(--subtle);text-transform:uppercase;letter-spacing:.03em;display:block;margin-bottom:2px}
 .spark{width:100%;height:20px;display:block}
+.detail-sparks{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;margin:1.25rem 0;padding:1rem 1.25rem;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
+.detail-spark .spark{height:48px}
+.detail-spark .spark-label{font-size:.75rem;font-weight:600;margin-bottom:4px}
 
 .detail-header{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1.25rem;margin:1.25rem 0;overflow:hidden}
 .detail-title{display:flex;align-items:center;gap:.5rem;margin:.75rem 0}
@@ -873,6 +1169,8 @@ td{padding:.5rem .75rem;border-bottom:1px solid var(--table-row-border);white-sp
 tr:hover td{background:var(--table-hover)}
 
 .server-settings{margin-top:.5rem}
+.srv-thresholds{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)}
+.thresh-hint{font-size:.78rem;color:var(--subtle);font-style:italic}
 textarea{width:100%;padding:.4rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.85rem;background:var(--input-bg);color:var(--text);margin-top:.25rem;font-family:inherit;resize:vertical}
 
 .settings-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem;margin-top:1rem}
@@ -891,6 +1189,9 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .prev-key-row{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;min-width:0}
 .prev-key-row .ekey-code{opacity:.7}
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
+.auth-box{max-width:380px;margin:3rem auto;background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:2rem}
+.auth-box h2{margin-bottom:1rem}
+.auth-box input[type="password"]{width:100%;padding:.5rem .75rem;border:1px solid var(--input-border);border-radius:6px;font-size:.9rem;background:var(--input-bg);color:var(--text);margin-top:.25rem}
 
 @media(max-width:640px){
     .grid{grid-template-columns:1fr}
@@ -904,15 +1205,20 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
     .table-wrap td:last-child{border-bottom:none}
 }
 </style>
-<script>(function(){var t=localStorage.getItem('sermony-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t)})()</script>
+<script>window.CSRF='<?=csrfToken()?>';(function(){var t=localStorage.getItem('sermony-theme')||(window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t)})()</script>
 </head>
 <body>
 <header><div class="wrap">
     <h1><span>&#9632;</span> Sermony</h1>
     <div class="hdr-links">
+        <?php if (isLoggedIn()): ?>
         <a href="?action=settings">Settings</a>
+        <a href="?action=logout">Logout</a>
+        <?php endif; ?>
         <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">&#9790;</button>
+        <?php if (isLoggedIn()): ?>
         <button onclick="enableNotif(this)" id="notifBtn" title="Enable browser notifications" style="display:none">&#128276;</button>
+        <?php endif; ?>
     </div>
 </div></header>
 <main class="wrap">
@@ -936,7 +1242,7 @@ function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id
     var dragged=null;
     grid.addEventListener('dragstart',function(e){var c=e.target.closest('.card[data-id]');if(!c)return;dragged=c;c.classList.add('dragging');e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','')});
     grid.addEventListener('dragover',function(e){e.preventDefault();var c=e.target.closest('.card[data-id]');if(!c||c===dragged)return;var r=c.getBoundingClientRect();grid.insertBefore(dragged,e.clientY>r.top+r.height/2?c.nextSibling:c)});
-    grid.addEventListener('dragend',function(){if(dragged)dragged.classList.remove('dragging');dragged=null;var cards=grid.querySelectorAll('.card[data-id]'),order=[];cards.forEach(function(c,i){order.push({id:+c.dataset.id,pos:i+1})});fetch('?action=reorder',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(order)})});
+    grid.addEventListener('dragend',function(){if(dragged)dragged.classList.remove('dragging');dragged=null;var cards=grid.querySelectorAll('.card[data-id]'),order=[];cards.forEach(function(c,i){order.push({id:+c.dataset.id,pos:i+1})});fetch('?action=reorder',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify(order)})});
 })();
 
 /* Browser notifications */
