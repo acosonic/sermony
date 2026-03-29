@@ -792,7 +792,7 @@ function showDashboard(): never {
     ?>
     <?php if ($counts['total'] > 0): ?>
     <div class="status-summary">
-        <span class="ss-item"><?=$counts['total']?> server<?=$counts['total']!==1?'s':''?></span>
+        <span class="ss-item ss-filter" data-filter="all" title="Show all servers"><?=$counts['total']?> server<?=$counts['total']!==1?'s':''?></span>
         <span class="ss-item ss-online ss-filter" data-filter="online"><?=$counts['online']?> online</span>
         <?php if ($counts['offline']): ?><span class="ss-item ss-offline ss-filter" data-filter="offline"><?=$counts['offline']?> offline</span><?php endif; ?>
         <?php if ($counts['crit']): ?><span class="ss-item ss-crit ss-filter" data-filter="crit"><?=$counts['crit']?> critical</span><?php endif; ?>
@@ -1270,7 +1270,7 @@ function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id
     filters.forEach(function(f){
         f.addEventListener('click',function(){
             var filter=f.dataset.filter;
-            if(active===filter){active=null;f.classList.remove('active')}
+            if(active===filter||filter==='all'){active=null;filters.forEach(function(x){x.classList.remove('active')})}
             else{filters.forEach(function(x){x.classList.remove('active')});f.classList.add('active');active=filter}
             document.querySelectorAll('.card[data-status]').forEach(function(c){
                 if(!active||c.dataset.status===active)c.classList.remove('filtered-out');
