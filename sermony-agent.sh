@@ -119,3 +119,30 @@ curl -sf --max-time 15 -X POST \
   \"load_15\":${load15},
   \"collected_at\":\"${ts}\"
 }" "${SERVER_URL}/?action=ingest" >/dev/null
+
+# ─── Pull config from server (auto-adjust interval) ───────────
+
+config_resp=$(curl -sf --max-time 10 -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"agent_key\":\"${AGENT_KEY}\"}" \
+    "${SERVER_URL}/?action=agent-config" 2>/dev/null || echo "")
+
+if [[ -n "$config_resp" ]]; then
+    # Strictly extract integer interval — reject anything non-numeric
+    new_interval=$(echo "$config_resp" | grep -oE '"interval"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' || echo "")
+
+    if [[ -n "$new_interval" ]] && [[ "$new_interval" =~ ^[0-9]+$ ]] && (( new_interval >= 1 && new_interval <= 1440 )); then
+        # Check current cron interval
+        current_cron=$(crontab -l 2>/dev/null | grep "${AGENT_SCRIPT:-/opt/sermony/agent.sh}" || echo "")
+        current_interval=$(echo "$current_cron" | grep -oE '^\*/[0-9]+' | grep -oE '[0-9]+' || echo "")
+
+        if [[ -n "$current_interval" ]] && [[ "$current_interval" != "$new_interval" ]]; then
+            agent_path="${AGENT_SCRIPT:-/opt/sermony/agent.sh}"
+            new_cron="*/${new_interval} * * * * ${agent_path} >> /var/log/sermony.log 2>&1"
+            ( crontab -l 2>/dev/null | grep -v "$agent_path" || true
+              echo "$new_cron"
+            ) | crontab -
+            echo "sermony: interval updated from ${current_interval} to ${new_interval} minutes"
+        fi
+    fi
+fi

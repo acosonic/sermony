@@ -387,6 +387,7 @@ $action = $_GET['action'] ?? 'dashboard';
 match ($action) {
     'enroll'         => (function(){ checkApiIpAllowlist(); handleEnroll(); })(),
     'ingest'         => (function(){ checkApiIpAllowlist(); handleIngest(); })(),
+    'agent-config'   => (function(){ checkApiIpAllowlist(); handleAgentConfig(); })(),
     'install-script' => serveScript('install.sh'),
     'agent-script'   => serveScript('sermony-agent.sh'),
     default          => null,
@@ -657,6 +658,21 @@ function handleUpdateServer(): never {
     }
     $s->execute();
     header('Location: ?action=server&id=' . $id . '&saved=1'); exit;
+}
+
+function handleAgentConfig(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') jsonErr('POST required', 405);
+    $in = json_decode(file_get_contents('php://input'), true);
+    if (!$in) jsonErr('Invalid JSON');
+    $ak = (string)($in['agent_key'] ?? '');
+    if ($ak === '') jsonErr('Missing agent_key', 401);
+    $d = db();
+    $s = $d->prepare('SELECT id, interval_minutes FROM servers WHERE agent_key=:k');
+    $s->bindValue(':k', $ak, SQLITE3_TEXT);
+    $srv = $s->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$srv) jsonErr('Unknown agent', 403);
+    $interval = (int)($srv['interval_minutes'] ?? setting('interval_minutes') ?? 15);
+    jsonOut(['interval' => $interval]);
 }
 
 function handleRotateAgentKey(): never {
