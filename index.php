@@ -851,8 +851,13 @@ function showDashboard(): never {
             elseif ($health==='crit') $cls .= ' card-crit';
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
+            $si = json_decode($srv['system_info'] ?? '{}', true) ?: [];
+            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? ''];
+            foreach ($si['services'] ?? [] as $svc) $searchParts[] = $svc['name'] ?? '';
+            foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
+            $searchStr = e(strtolower(implode(' ', array_filter($searchParts))));
         ?>
-        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" draggable="true">
+        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-search="<?=$searchStr?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
                 <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname" <?php if(!empty($srv['notes'])):?>title="<?=e($srv['notes'])?>"<?php endif;?>><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
@@ -912,8 +917,11 @@ function showDashboard(): never {
                 $diskTotalNum = (float)preg_replace('/[^0-9.]/', '', $diskTotal);
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
+                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? ''];
+                foreach ($si['services'] ?? [] as $svc) $dgSearch[] = $svc['name'] ?? '';
+                foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
             ?>
-            <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
+            <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-search="<?=e(strtolower(implode(' ', array_filter($dgSearch))))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
                 <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
                 <td><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?></td>
                 <td><?=$cores ?: "\xE2\x80\x94"?></td>
@@ -1484,7 +1492,7 @@ function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id
 function copyText(t,el){navigator.clipboard.writeText(t).then(function(){var o=el.innerHTML;el.innerHTML='Copied!';setTimeout(function(){el.innerHTML=o},1200)})}
 function toggleFullscreen(){document.body.classList.toggle('fullscreen');localStorage.setItem('sermony-fs',document.body.classList.contains('fullscreen')?'1':'0')}
 function toggleCompact(){document.body.classList.toggle('compact');localStorage.setItem('sermony-compact',document.body.classList.contains('compact')?'1':'0')}
-function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('.card[data-id]').forEach(function(c){var name=c.querySelector('.card-hostname').textContent.toLowerCase();var meta=c.querySelector('.card-meta').textContent.toLowerCase();c.classList.toggle('search-hidden',q&&name.indexOf(q)<0&&meta.indexOf(q)<0)});var dg=document.getElementById('datagrid');if(dg)dg.querySelectorAll('tbody tr').forEach(function(r){var t=r.textContent.toLowerCase();r.style.display=q&&t.indexOf(q)<0?'none':''})}
+function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('[data-search]').forEach(function(el){var s=el.dataset.search||'';var match=!q||s.indexOf(q)>=0;if(el.tagName==='TR'){el.style.display=match?'':'none'}else{el.classList.toggle('search-hidden',!match)}})}
 function toggleDatagrid(){var g=document.getElementById('serverGrid'),d=document.getElementById('datagrid');if(!g||!d)return;var show=d.style.display==='none';d.style.display=show?'':'none';g.style.display=show?'none':'';localStorage.setItem('sermony-dg',show?'1':'0')}
 (function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact');if(localStorage.getItem('sermony-dg')==='1'){var g=document.getElementById('serverGrid'),d=document.getElementById('datagrid');if(g&&d){d.style.display='';g.style.display='none'}}})();
 
