@@ -893,15 +893,15 @@ function showServer(): never {
         if (!empty($sysInfo)): ?>
         <div class="sys-info">
             <div class="sys-info-grid">
-                <?php if (!empty($sysInfo['cpu_model'])): ?><div><span class="sys-label">CPU</span><span class="sys-val"><?=e($sysInfo['cpu_model'])?> (<?=(int)($sysInfo['cpu_cores'] ?? 0)?> cores)</span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['ram_total_gb'])): ?><div><span class="sys-label">RAM</span><span class="sys-val"><?=e($sysInfo['ram_total_gb'])?> GB</span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['disk_total'])): ?><div><span class="sys-label">Disk</span><span class="sys-val"><?=e($sysInfo['disk_total'])?> total</span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['os'])): ?><div><span class="sys-label">OS</span><span class="sys-val"><?=e($sysInfo['os'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['kernel'])): ?><div><span class="sys-label">Kernel</span><span class="sys-val"><?=e($sysInfo['kernel'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['uptime'])): ?><div><span class="sys-label">Uptime</span><span class="sys-val"><?=e($sysInfo['uptime'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['net_interfaces'])): ?><div><span class="sys-label">Interfaces (<?=(int)($sysInfo['iface_count'] ?? 0)?>)</span><span class="sys-val"><?=e($sysInfo['net_interfaces'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['net_speed'])): ?><div><span class="sys-label">Link Speed</span><span class="sys-val"><?=e($sysInfo['net_speed'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['dns_servers'])): ?><div><span class="sys-label">DNS</span><span class="sys-val"><?=e($sysInfo['dns_servers'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['cpu_model'])): ?><div><span class="sys-label">CPU</span><span class="sys-val"><?=e((string)$sysInfo['cpu_model'])?> (<?=(int)($sysInfo['cpu_cores'] ?? 0)?> cores)</span></div><?php endif; ?>
+                <?php if (isset($sysInfo['ram_total_gb'])): ?><div><span class="sys-label">RAM</span><span class="sys-val"><?=e((string)$sysInfo['ram_total_gb'])?> GB</span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['disk_total'])): ?><div><span class="sys-label">Disk</span><span class="sys-val"><?=e((string)$sysInfo['disk_total'])?> total</span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['os'])): ?><div><span class="sys-label">OS</span><span class="sys-val"><?=e((string)$sysInfo['os'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['kernel'])): ?><div><span class="sys-label">Kernel</span><span class="sys-val"><?=e((string)$sysInfo['kernel'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['uptime'])): ?><div><span class="sys-label">Uptime</span><span class="sys-val"><?=e((string)$sysInfo['uptime'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['net_interfaces'])): ?><div><span class="sys-label">Interfaces (<?=(int)($sysInfo['iface_count'] ?? 0)?>)</span><span class="sys-val"><?=e((string)$sysInfo['net_interfaces'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['net_speed'])): ?><div><span class="sys-label">Link Speed</span><span class="sys-val"><?=e((string)$sysInfo['net_speed'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['dns_servers'])): ?><div><span class="sys-label">DNS</span><span class="sys-val"><?=e((string)$sysInfo['dns_servers'])?></span></div><?php endif; ?>
                 <div><span class="sys-label">Docker</span><span class="sys-val"><?=!empty($sysInfo['docker']) ? 'Yes (' . (int)($sysInfo['docker_containers'] ?? 0) . ' running)' : 'No'?></span></div>
             </div>
         </div>
