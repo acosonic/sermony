@@ -852,9 +852,11 @@ function showDashboard(): never {
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
             $si = json_decode($srv['system_info'] ?? '{}', true) ?: [];
-            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? ''];
+            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
             foreach ($si['services'] ?? [] as $svc) $searchParts[] = $svc['name'] ?? '';
+            if (!empty($si['docker'])) $searchParts[] = 'docker';
             foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
+            foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $searchParts[] = $nic['name'] ?? ''; }
             $searchStr = e(strtolower(implode(' ', array_filter($searchParts))));
         ?>
         <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-search="<?=$searchStr?>" draggable="true">
@@ -917,9 +919,11 @@ function showDashboard(): never {
                 $diskTotalNum = (float)preg_replace('/[^0-9.]/', '', $diskTotal);
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
-                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? ''];
+                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
                 foreach ($si['services'] ?? [] as $svc) $dgSearch[] = $svc['name'] ?? '';
+                if (!empty($si['docker'])) $dgSearch[] = 'docker';
                 foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
+                foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $dgSearch[] = $nic['name'] ?? ''; }
             ?>
             <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-search="<?=e(strtolower(implode(' ', array_filter($dgSearch))))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
                 <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
