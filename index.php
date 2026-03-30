@@ -803,11 +803,8 @@ function showDashboard(): never {
         <?php if ($counts['crit']): ?><span class="ss-item ss-crit ss-filter" data-filter="crit"><?=$counts['crit']?> critical</span><?php endif; ?>
         <?php if ($counts['warn']): ?><span class="ss-item ss-warn ss-filter" data-filter="warn"><?=$counts['warn']?> warning</span><?php endif; ?>
         <?php if ($counts['stale']): ?><span class="ss-item ss-stale ss-filter" data-filter="stale"><?=$counts['stale']?> stale</span><?php endif; ?>
+        <span class="ss-search">&#128269;<input type="text" id="serverSearch" placeholder="Search..." oninput="filterSearch(this.value)"></span>
     </div>
-    <?php endif; ?>
-
-    <?php if ($counts['total'] > 5): ?>
-    <input type="text" id="serverSearch" class="server-search" placeholder="Search servers..." oninput="filterSearch(this.value)">
     <?php endif; ?>
 
     <?php if (empty($servers)): ?>
@@ -1256,8 +1253,9 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
 
 /* Search */
-.server-search{width:100%;padding:.5rem .75rem;border:1px solid var(--card-border);border-radius:8px;font-size:.85rem;background:var(--card);color:var(--text);margin-bottom:.75rem}
-.server-search:focus{outline:2px solid var(--blue);outline-offset:-1px}
+.ss-search{display:flex;align-items:center;gap:.3rem;margin-left:auto;font-size:.8rem;color:var(--subtle)}
+.ss-search input{border:1px solid var(--card-border);border-radius:6px;padding:.15rem .4rem;font-size:.78rem;background:var(--input-bg);color:var(--text);width:120px;transition:width .2s}
+.ss-search input:focus{outline:none;border-color:var(--blue);width:180px}
 
 /* Fullscreen */
 body.fullscreen .wrap{max-width:none}
