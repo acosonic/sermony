@@ -100,6 +100,7 @@ That's it. Servers appear on the dashboard automatically.
 - Agent key rotation per server
 - Secure enrollment flow (unique per-agent keys)
 - Graceful degradation when agent tools are missing
+- Plugin system for custom extensions
 - Automatic metric retention cleanup
 
 ## Files
@@ -110,6 +111,54 @@ That's it. Servers appear on the dashboard automatically.
 | `sermony-agent.sh` | Client agent — collects metrics, sends JSON via curl |
 | `install.sh` | Client installer — enrolls, downloads agent, sets up cron |
 | `fake-agents.sh` | Test script — creates 10 fake servers with various health states |
+| `plugins/` | Plugin directory — drop-in PHP plugins for custom extensions |
+
+## Plugins
+
+Sermony supports a simple plugin system. Each plugin is a folder inside `plugins/` containing a `plugin.php` file that returns an array of hooks.
+
+### Available Hooks
+
+| Hook | Location | Receives |
+|------|----------|----------|
+| `dashboard_top` | Above server grid | — |
+| `dashboard_card` | Inside each card, after metrics | `$server` |
+| `dashboard_bottom` | Below server grid | — |
+| `datagrid_columns` | Extra datagrid column headers | — |
+| `datagrid_row` | Extra datagrid cells per row | `$server` |
+| `server_detail` | Server detail, after system info | `$server` |
+| `server_detail_bottom` | After metrics table | `$server`, `$metrics` |
+| `after_ingest` | After metrics are saved | `$serverId`, `$metrics`, `$server` |
+| `settings_panel` | Settings page, before Security | — |
+| `header_links` | Header navigation area | — |
+
+### Creating a Plugin
+
+```bash
+mkdir plugins/my-plugin
+```
+
+```php
+<?php
+// plugins/my-plugin/plugin.php
+return [
+    'name'    => 'My Plugin',
+    'version' => '1.0',
+    'author'  => 'Your Name',
+    'hooks'   => [
+        'dashboard_card' => function (array $server) {
+            $info = json_decode($server['system_info'] ?? '{}', true);
+            $uptime = $info['uptime'] ?? '';
+            if ($uptime) {
+                echo '<div class="m"><span class="ml">Uptime</span>';
+                echo '<span class="mv">' . htmlspecialchars($uptime) . '</span></div>';
+            }
+        },
+    ],
+];
+```
+
+See `plugins/example/plugin.php` for a complete reference with all hooks documented.
 
 ## Security
 

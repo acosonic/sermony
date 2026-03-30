@@ -250,6 +250,36 @@ function sparkSvg(array $values, string $type, ?array $srv = null): string {
     return "<svg class=\"spark\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\">$bars</svg>";
 }
 
+// ─── Plugins ─────────────────────────────────────────────────
+
+function loadPlugins(): array {
+    static $plugins = null;
+    if ($plugins !== null) return $plugins;
+    $plugins = [];
+    $dir = __DIR__ . '/plugins';
+    if (!is_dir($dir)) return $plugins;
+    foreach (glob($dir . '/*/plugin.php') as $file) {
+        $p = @include $file;
+        if (is_array($p) && isset($p['hooks'])) $plugins[] = $p;
+    }
+    return $plugins;
+}
+
+function doHook(string $hook, mixed ...$args): void {
+    foreach (loadPlugins() as $p) {
+        if (isset($p['hooks'][$hook]) && is_callable($p['hooks'][$hook]))
+            ($p['hooks'][$hook])(...$args);
+    }
+}
+
+function doHookFilter(string $hook, mixed $value, mixed ...$args): mixed {
+    foreach (loadPlugins() as $p) {
+        if (isset($p['hooks'][$hook]) && is_callable($p['hooks'][$hook]))
+            $value = ($p['hooks'][$hook])($value, ...$args);
+    }
+    return $value;
+}
+
 // ─── Alerts ──────────────────────────────────────────────────
 
 function shouldAlert(int $serverId, string $alertType): bool {
@@ -582,6 +612,7 @@ function handleIngest(): never {
 
     // Check alert thresholds
     checkAlerts($id, $srv['hostname'], $in, $srv);
+    doHook('after_ingest', $id, $in, $srv);
 
     // Probabilistic cleanup (~2% of requests)
     if (random_int(1, 50) === 1) {
@@ -795,6 +826,7 @@ function showDashboard(): never {
 
     pageTop('Dashboard');
     ?>
+    <?php doHook('dashboard_top'); ?>
     <?php if ($counts['total'] > 0): ?>
     <div class="status-summary">
         <span class="ss-item ss-filter" data-filter="all" title="Show all servers"><?=$counts['total']?> server<?=$counts['total']!==1?'s':''?></span>
@@ -845,6 +877,7 @@ function showDashboard(): never {
                 <div class="m"><span class="ml">Mail Q</span><span class="mv" <?php if($srv['mail_queue']!==null):?>style="color:<?=mColorFor('mail',(float)$srv['mail_queue'],$srv)?>"<?php endif;?>><?=$srv['mail_queue']!==null ? (int)$srv['mail_queue'] : "\xE2\x80\x94"?></span></div>
                 <div class="m"><span class="ml">Load</span><span class="mv"><?=$srv['load_1']!==null ? number_format((float)$srv['load_1'],2) : "\xE2\x80\x94"?></span></div>
             </div>
+            <?php doHook('dashboard_card', $srv); ?>
             <div class="card-foot"><?=$on ? ($stale ? 'Stale' : 'Online') : 'Offline'?> &middot; <?=timeAgo($srv['last_seen_at'])?></div>
         </div>
         <?php endforeach; ?>
@@ -865,6 +898,7 @@ function showDashboard(): never {
                 <th>Net &#8593;</th>
                 <th>Mail Q</th>
                 <th class="dg-sort" data-col="load" data-type="num">Load</th>
+                <?php doHook('datagrid_columns'); ?>
                 <th>Status</th>
             </tr></thead>
             <tbody>
@@ -893,12 +927,14 @@ function showDashboard(): never {
                 <td><?=$srv['network_tx_bps']!==null ? fmtBytes((int)$srv['network_tx_bps']).'/s' : "\xE2\x80\x94"?></td>
                 <td style="color:<?=$srv['mail_queue']!==null ? mColorFor('mail',(float)$srv['mail_queue'],$srv) : 'var(--muted)'?>"><?=$srv['mail_queue']!==null ? (int)$srv['mail_queue'] : "\xE2\x80\x94"?></td>
                 <td><?=$srv['load_1']!==null ? number_format((float)$srv['load_1'],2) : "\xE2\x80\x94"?></td>
+                <?php doHook('datagrid_row', $srv); ?>
                 <td><?php if ($statusCls): ?><span class="badge <?=$statusCls?>"><?=$statusTxt?></span><?php else: ?><span style="color:var(--green)">OK</span><?php endif; ?></td>
             </tr>
             <?php endforeach; ?>
             </tbody>
         </table>
     </div>
+    <?php doHook('dashboard_bottom'); ?>
     <?php endif;
     pageBottom(); exit;
 }
@@ -1042,6 +1078,7 @@ function showServer(): never {
             </div>
         </form>
         <?php if (isset($_GET['key_rotated'])): ?><div class="alert-warn" style="margin-top:.5rem">Agent key rotated. The agent on this server must be re-enrolled with the new key.</div><?php endif; ?>
+        <?php doHook('server_detail', $srv); ?>
         <div style="display:flex;gap:.5rem;margin-top:.75rem;flex-wrap:wrap">
             <a href="?action=export-csv&id=<?=$srv['id']?>" class="btn-secondary">Export CSV</a>
             <form method="post" action="?action=rotate-agent-key" onsubmit="return confirm('Rotate agent key for <?=e($srv['hostname'])?>?\n\nThe current agent will stop authenticating until re-enrolled.')">
@@ -1101,6 +1138,7 @@ function showServer(): never {
             </tbody>
         </table>
     </div>
+    <?php doHook('server_detail_bottom', $srv, $metrics); ?>
     <?php endif;
     pageBottom(); exit;
 }
@@ -1201,6 +1239,7 @@ function showSettings(): never {
             <button type="submit" class="btn-primary" style="margin-top:1.25rem">Save Settings</button>
         </form>
 
+        <?php doHook('settings_panel'); ?>
         <fieldset style="margin-top:1.5rem">
             <legend>Security</legend>
             <a href="?action=setup-password" class="btn-secondary">Change Password</a>
@@ -1417,6 +1456,7 @@ body.compact .badge{font-size:.55rem;padding:.1rem .3rem}
         <?php if (isLoggedIn()): ?>
         <a href="?action=settings">Settings</a>
         <a href="?action=logout">Logout</a>
+        <?php doHook('header_links'); ?>
         <?php endif; ?>
         <button class="theme-toggle" onclick="toggleDatagrid()" id="dgBtn" title="Toggle table view">&#x2637;</button>
         <button class="theme-toggle" onclick="toggleCompact()" id="compactBtn" title="Toggle compact view">&#9776;</button>
