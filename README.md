@@ -15,7 +15,10 @@ This is a **pet project** — built for personal use to monitor Ubuntu servers. 
 ### Dashboard (dark)
 ![Dashboard Dark](screenshots/dashboard-dark.png)
 
-### Server Detail
+### Datagrid View (sortable by CPU, RAM, disk, cores, load)
+![Datagrid](screenshots/datagrid.png)
+
+### Server Detail (system info, NICs, Docker, services, sparklines)
 ![Server Detail](screenshots/server-detail.png)
 
 ### Settings
@@ -69,19 +72,28 @@ That's it. Servers appear on the dashboard automatically.
 ## Features
 
 - Password-protected dashboard with session-based auth
+- Three view modes: card grid, compact list, sortable datagrid
+- Datagrid with sortable columns: name, CPU cores, CPU%, RAM, Mem%, disk total, Disk%, IOPS, load
+- Fullscreen mode for wide monitors
+- Search/filter servers by name, IP, or FQDN
+- Clickable status pills to filter by: online, offline, critical, warning, stale
 - Dark/light theme (follows OS preference, manual toggle)
 - Sparkline charts on server detail page (CPU/memory/disk trends)
+- System info: CPU model/cores, RAM, disk, OS, kernel, uptime, network interfaces, DNS, Docker, services
+- Per-interface details: name, state (UP/DOWN), IP, MAC, link speed
+- Docker container listing with image, status, and ports
+- Active service detection (mysql, postgresql, nginx, postfix, redis, etc.)
 - Auto-refresh dashboard without full page reload
 - Browser notifications when servers go critical/offline/recover
 - Drag-and-drop card reordering (persisted)
 - Auto-sort by severity: critical > warning > stale > offline > healthy
-- Stale detection — servers that miss expected check-ins get flagged before going offline
+- Stale detection — servers that miss expected check-ins get flagged
 - Per-server configurable check intervals and alert thresholds (agents auto-update their cron)
-- Configurable alert thresholds (CPU, memory, disk, mail queue)
 - Email and webhook notifications with configurable cooldown
 - Status badges: CRITICAL, WARNING, STALE, OFFLINE
-- Custom display names per server (hostname shown in detail metadata)
-- Custom notes per server
+- Custom display names and notes per server (notes shown as tooltip on hover)
+- One-click IP copy with configurable SSH username (copies `user@ip`)
+- Server timezone display on dashboard cards
 - Export metrics as CSV
 - Server detail page with metrics history (responsive on mobile)
 - Enrollment key rotation with old key management
