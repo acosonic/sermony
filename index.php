@@ -913,7 +913,7 @@ function showDashboard(): never {
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
             ?>
-            <tr data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
+            <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
                 <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
                 <td><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?></td>
                 <td><?=$cores ?: "\xE2\x80\x94"?></td>
@@ -1518,9 +1518,9 @@ function toggleDatagrid(){var g=document.getElementById('serverGrid'),d=document
             var filter=f.dataset.filter;
             if(active===filter||filter==='all'){active=null;filters.forEach(function(x){x.classList.remove('active')})}
             else{filters.forEach(function(x){x.classList.remove('active')});f.classList.add('active');active=filter}
-            document.querySelectorAll('.card[data-status]').forEach(function(c){
-                if(!active||c.dataset.status===active)c.classList.remove('filtered-out');
-                else c.classList.add('filtered-out');
+            document.querySelectorAll('[data-status]').forEach(function(c){
+                if(!active||c.dataset.status===active){c.classList.remove('filtered-out');c.style.display=''}
+                else{c.classList.add('filtered-out');c.style.display='none'}
             });
         });
     });
