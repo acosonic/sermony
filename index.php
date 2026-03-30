@@ -899,11 +899,59 @@ function showServer(): never {
                 <?php if (!empty($sysInfo['os'])): ?><div><span class="sys-label">OS</span><span class="sys-val"><?=e((string)$sysInfo['os'])?></span></div><?php endif; ?>
                 <?php if (!empty($sysInfo['kernel'])): ?><div><span class="sys-label">Kernel</span><span class="sys-val"><?=e((string)$sysInfo['kernel'])?></span></div><?php endif; ?>
                 <?php if (!empty($sysInfo['uptime'])): ?><div><span class="sys-label">Uptime</span><span class="sys-val"><?=e((string)$sysInfo['uptime'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['net_interfaces'])): ?><div><span class="sys-label">Interfaces (<?=(int)($sysInfo['iface_count'] ?? 0)?>)</span><span class="sys-val"><?=e((string)$sysInfo['net_interfaces'])?></span></div><?php endif; ?>
-                <?php if (!empty($sysInfo['net_speed'])): ?><div><span class="sys-label">Link Speed</span><span class="sys-val"><?=e((string)$sysInfo['net_speed'])?></span></div><?php endif; ?>
+                <?php
+                $nics = $sysInfo['net_interfaces'] ?? [];
+                if (is_string($nics)) { /* legacy comma format */ echo '<div><span class="sys-label">Interfaces</span><span class="sys-val">' . e($nics) . '</span></div>'; $nics = []; }
+                ?>
                 <?php if (!empty($sysInfo['dns_servers'])): ?><div><span class="sys-label">DNS</span><span class="sys-val"><?=e((string)$sysInfo['dns_servers'])?></span></div><?php endif; ?>
-                <div><span class="sys-label">Docker</span><span class="sys-val"><?=!empty($sysInfo['docker']) ? 'Yes (' . (int)($sysInfo['docker_containers'] ?? 0) . ' running)' : 'No'?></span></div>
+                <div><span class="sys-label">Docker</span><span class="sys-val"><?=!empty($sysInfo['docker']) ? 'Yes (' . (int)($sysInfo['docker_count'] ?? $sysInfo['docker_containers'] ?? 0) . ' running)' : 'No'?></span></div>
+                <?php
+                $services = $sysInfo['services'] ?? [];
+                if (!empty($services) && is_array($services)):
+                ?><div><span class="sys-label">Services</span><span class="sys-val"><?php
+                    $svcNames = array_map(fn($s) => e((string)$s['name']), $services);
+                    echo implode(', ', $svcNames);
+                ?></span></div><?php endif; ?>
             </div>
+            <?php if (!empty($nics) && is_array($nics)): ?>
+            <div class="nic-table">
+                <table>
+                    <thead><tr><th>Interface</th><th>State</th><th>IP</th><th>MAC</th><th>Speed</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($nics as $nic): ?>
+                    <tr>
+                        <td data-label="Interface"><strong><?=e((string)($nic['name'] ?? ''))?></strong></td>
+                        <td data-label="State"><span class="nic-state nic-<?=strtolower($nic['state'] ?? 'unknown')?>"><?=e((string)($nic['state'] ?? ''))?></span></td>
+                        <td data-label="IP"><?=e((string)($nic['ip'] ?? "\xE2\x80\x94"))?></td>
+                        <td data-label="MAC"><code><?=e((string)($nic['mac'] ?? "\xE2\x80\x94"))?></code></td>
+                        <td data-label="Speed"><?=e((string)($nic['speed'] ?? "\xE2\x80\x94"))?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
+            <?php
+            $dContainers = $sysInfo['docker_containers'] ?? [];
+            if (!empty($dContainers) && is_array($dContainers) && isset($dContainers[0]['name'])):
+            ?>
+            <div class="nic-table" style="margin-top:.6rem">
+                <div style="font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:600;margin-bottom:.3rem">Docker Containers</div>
+                <table>
+                    <thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Ports</th></tr></thead>
+                    <tbody>
+                    <?php foreach ($dContainers as $dc): ?>
+                    <tr>
+                        <td data-label="Name"><strong><?=e((string)($dc['name'] ?? ''))?></strong></td>
+                        <td data-label="Image"><code><?=e((string)($dc['image'] ?? ''))?></code></td>
+                        <td data-label="Status"><?=e((string)($dc['status'] ?? ''))?></td>
+                        <td data-label="Ports"><small><?=e((string)($dc['ports'] ?? ''))?></small></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
         <?php if (isset($_GET['saved'])): ?><div class="alert-ok" style="margin-top:.5rem">Server settings saved.</div><?php endif; ?>
@@ -1230,6 +1278,13 @@ tr:hover td{background:var(--table-hover)}
 .sys-info-grid>div{display:flex;gap:.4rem;align-items:baseline}
 .sys-label{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;min-width:5rem}
 .sys-val{color:var(--text);word-break:break-word}
+.nic-table{margin-top:.6rem}
+.nic-table table{width:100%;border-collapse:collapse;font-size:.8rem}
+.nic-table th{text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.03em}
+.nic-table td{padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)}
+.nic-table code{font-size:.75rem;color:var(--subtle)}
+.nic-state{font-size:.7rem;font-weight:600;text-transform:uppercase}
+.nic-up{color:var(--green)} .nic-down{color:var(--red)} .nic-unknown{color:var(--subtle)}
 .server-settings{margin-top:.5rem}
 .srv-thresholds{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)}
 .thresh-hint{font-size:.78rem;color:var(--subtle);font-style:italic}

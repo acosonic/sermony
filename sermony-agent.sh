@@ -107,18 +107,56 @@ disk_total=$(df -h / 2>/dev/null | awk 'NR==2 {print $2}')
 os_name=$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || uname -sr)
 kernel=$(uname -r)
 uptime_str=$(uptime -p 2>/dev/null | sed 's/^up //' || echo "")
-net_ifaces=$(ip -br link 2>/dev/null | grep -v '^lo ' | awk '{print $1}' | tr '\n' ', ' | sed 's/,$//')
-net_speed=$(ethtool eth0 2>/dev/null | grep -i speed | awk '{print $2}' || echo "")
-[[ -z "$net_speed" ]] && net_speed=$(ethtool ens3 2>/dev/null | grep -i speed | awk '{print $2}' || echo "")
+# Build per-interface JSON array
+net_ifaces_json="["
+first_nic=1
+while read -r ifname ifstate; do
+    [[ "$ifname" == "lo" ]] && continue
+    ifip=$(ip -4 addr show "$ifname" 2>/dev/null | awk '/inet / {print $2}' | head -1)
+    ifmac=$(ip link show "$ifname" 2>/dev/null | awk '/link\/ether/ {print $2}')
+    ifspeed=$(ethtool "$ifname" 2>/dev/null | awk '/Speed:/ {print $2}')
+    [[ "$ifspeed" == "Unknown!" ]] && ifspeed=""
+    [[ $first_nic -eq 0 ]] && net_ifaces_json+=","
+    net_ifaces_json+="{\"name\":\"${ifname}\",\"state\":\"${ifstate}\",\"ip\":\"${ifip}\",\"mac\":\"${ifmac}\",\"speed\":\"${ifspeed}\"}"
+    first_nic=0
+done < <(ip -br link 2>/dev/null | awk '{print $1, $2}')
+net_ifaces_json+="]"
+iface_count=$(echo "$net_ifaces_json" | grep -o '"name"' | wc -l)
 dns_servers=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')
 has_docker="false"
 docker_count=0
 DOCKER_BIN=$(command -v docker 2>/dev/null || which docker 2>/dev/null || ls /snap/bin/docker /usr/local/bin/docker /usr/bin/docker 2>/dev/null | head -1)
+docker_containers_json="[]"
 if [[ -n "$DOCKER_BIN" && -x "$DOCKER_BIN" ]]; then
     has_docker="true"
     docker_count=$($DOCKER_BIN ps -q 2>/dev/null | wc -l || echo "0")
+    # Collect running container details
+    docker_containers_json="["
+    first_dc=1
+    while IFS='|' read -r cname cimage cstatus cports; do
+        [[ -z "$cname" ]] && continue
+        [[ $first_dc -eq 0 ]] && docker_containers_json+=","
+        # Escape quotes in fields
+        cstatus=$(echo "$cstatus" | sed 's/"/\\"/g')
+        cports=$(echo "$cports" | sed 's/"/\\"/g')
+        docker_containers_json+="{\"name\":\"${cname}\",\"image\":\"${cimage}\",\"status\":\"${cstatus}\",\"ports\":\"${cports}\"}"
+        first_dc=0
+    done < <($DOCKER_BIN ps --format '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}' 2>/dev/null)
+    docker_containers_json+="]"
 fi
 iface_count=$(ip -br link 2>/dev/null | grep -cv '^lo ' || echo "0")
+
+# ─── Detect notable services ─────────────────────────────────
+services_json="["
+first_svc=1
+for svc in mysql mariadb postgresql nginx apache2 httpd postfix dovecot exim4 redis-server mongod rabbitmq-server elasticsearch php-fpm named bind9; do
+    if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        [[ $first_svc -eq 0 ]] && services_json+=","
+        services_json+="{\"name\":\"${svc}\",\"active\":true}"
+        first_svc=0
+    fi
+done
+services_json+="]"
 
 # ─── Send ─────────────────────────────────────────────────────
 
@@ -150,12 +188,13 @@ curl -sf --max-time 15 -X POST \
     \"os\":\"${os_name}\",
     \"kernel\":\"${kernel}\",
     \"uptime\":\"${uptime_str}\",
-    \"net_interfaces\":\"${net_ifaces}\",
-    \"net_speed\":\"${net_speed}\",
+    \"net_interfaces\":${net_ifaces_json},
     \"iface_count\":${iface_count},
     \"dns_servers\":\"${dns_servers}\",
     \"docker\":${has_docker},
-    \"docker_containers\":${docker_count}
+    \"docker_count\":${docker_count},
+    \"docker_containers\":${docker_containers_json},
+    \"services\":${services_json}
   }
 }" "${SERVER_URL}/?action=ingest" >/dev/null
 
