@@ -10,9 +10,12 @@ source "$CONFIG"
 
 HOST=$(hostname | tr -cd '[:alnum:]._-')
 FQDN=$(hostname -f 2>/dev/null || echo "")
-PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null \
-         || curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+PUBLIC_IP=$(curl -s4 --max-time 5 https://ifconfig.me 2>/dev/null \
+         || curl -s4 --max-time 5 https://api.ipify.org 2>/dev/null \
          || echo "")
+IPV6=$(curl -s6 --max-time 5 https://ifconfig.me 2>/dev/null \
+    || ip -6 addr show scope global 2>/dev/null | awk '/inet6/ {print $2; exit}' \
+    || echo "")
 
 # ─── Snapshot before (CPU, network, disk I/O) ────────────────
 
@@ -166,6 +169,7 @@ curl -sf --max-time 15 -X POST \
   \"agent_key\":\"${AGENT_KEY}\",
   \"hostname\":\"${HOST}\",
   \"public_ip\":\"${PUBLIC_IP}\",
+  \"ipv6\":\"${IPV6}\",
   \"fqdn\":\"${FQDN}\",
   \"cpu_usage\":${cpu_pct},
   \"memory_usage\":${mem_pct},

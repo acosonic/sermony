@@ -63,6 +63,7 @@ function db(): SQLite3 {
     @$i->exec('ALTER TABLE servers ADD COLUMN interval_minutes INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN notes TEXT DEFAULT ""');
     @$i->exec('ALTER TABLE servers ADD COLUMN display_name TEXT');
+    @$i->exec('ALTER TABLE servers ADD COLUMN ipv6 TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN timezone TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN system_info TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_warn INTEGER');
@@ -99,7 +100,7 @@ function migrate(SQLite3 $db): void {
     $db->exec('CREATE TABLE servers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         hostname TEXT NOT NULL, agent_key TEXT NOT NULL UNIQUE,
-        public_ip TEXT, fqdn TEXT,
+        public_ip TEXT, ipv6 TEXT, fqdn TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         last_seen_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
         interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT, timezone TEXT, system_info TEXT,
@@ -585,8 +586,9 @@ function handleIngest(): never {
     if (!$srv) jsonErr('Unknown agent', 403);
     $id = (int)$srv['id'];
 
-    $s = $d->prepare("UPDATE servers SET public_ip=:ip, fqdn=:f, hostname=:h, timezone=:tz, system_info=:si, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
+    $s = $d->prepare("UPDATE servers SET public_ip=:ip, ipv6=:ip6, fqdn=:f, hostname=:h, timezone=:tz, system_info=:si, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
     $s->bindValue(':ip', isset($in['public_ip']) ? (string)$in['public_ip'] : null);
+    $s->bindValue(':ip6', isset($in['ipv6']) ? (string)$in['ipv6'] : null);
     $s->bindValue(':f', isset($in['fqdn']) ? (string)$in['fqdn'] : null);
     $s->bindValue(':h', trim((string)($in['hostname'] ?? '')));
     $s->bindValue(':tz', isset($in['timezone']) ? (string)$in['timezone'] : null);
@@ -852,7 +854,7 @@ function showDashboard(): never {
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
             $si = json_decode($srv['system_info'] ?? '{}', true) ?: [];
-            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
+            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
             foreach ($si['services'] ?? [] as $svc) $searchParts[] = $svc['name'] ?? '';
             if (!empty($si['docker'])) $searchParts[] = 'docker';
             foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
@@ -873,7 +875,7 @@ function showDashboard(): never {
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
             </div>
-            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?><?php if (!empty($srv['timezone'])): ?> &middot; <span class="tz-badge"><?=e($srv['timezone'])?></span><?php endif; ?></div>
+            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if (!empty($srv['ipv6'])): ?> &middot; <span class="ipv6-tag" title="<?=e($srv['ipv6'])?>"><?=e(strlen($srv['ipv6']) > 20 ? substr($srv['ipv6'], 0, 18) . '..' : $srv['ipv6'])?></span><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?><?php if (!empty($srv['timezone'])): ?> &middot; <span class="tz-badge"><?=e($srv['timezone'])?></span><?php endif; ?></div>
             <div class="metrics">
                 <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu,$srv)?>"></div></div><?php endif;?></div>
                 <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem,$srv)?>"></div></div><?php endif;?></div>
@@ -919,7 +921,7 @@ function showDashboard(): never {
                 $diskTotalNum = (float)preg_replace('/[^0-9.]/', '', $diskTotal);
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
-                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
+                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
                 foreach ($si['services'] ?? [] as $svc) $dgSearch[] = $svc['name'] ?? '';
                 if (!empty($si['docker'])) $dgSearch[] = 'docker';
                 foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
@@ -980,6 +982,7 @@ function showServer(): never {
         <div class="detail-meta">
             <span><strong>Hostname:</strong> <?=e($srv['hostname'])?></span>
             <span><strong>IP:</strong> <?=e($srv['public_ip'] ?: "\xE2\x80\x94")?></span>
+            <?php if (!empty($srv['ipv6'])): ?><span><strong>IPv6:</strong> <?=e($srv['ipv6'])?></span><?php endif; ?>
             <span><strong>FQDN:</strong> <?=e($srv['fqdn'] ?: "\xE2\x80\x94")?></span>
             <span><strong>Status:</strong> <?=$on ? 'Online' : 'Offline'?></span>
             <span><strong>Enrolled:</strong> <?=e(substr($srv['created_at'],0,16))?></span>
@@ -1330,6 +1333,7 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .ip-copy:hover{background:var(--code-bg)}
 .ip-copy small{font-size:.7rem;opacity:.5}
 .tz-badge{font-size:.7rem;color:var(--subtle);background:var(--code-bg);padding:.1rem .3rem;border-radius:3px}
+.ipv6-tag{font-size:.65rem;color:var(--subtle);cursor:help}
 .card-foot{font-size:.75rem;color:var(--muted);margin-top:.75rem;padding-top:.5rem;border-top:1px solid var(--foot-border)}
 
 .badge{font-size:.6rem;font-weight:700;letter-spacing:.05em;padding:.15rem .4rem;border-radius:4px;text-transform:uppercase}
