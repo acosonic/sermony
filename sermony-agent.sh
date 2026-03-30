@@ -113,9 +113,10 @@ net_speed=$(ethtool eth0 2>/dev/null | grep -i speed | awk '{print $2}' || echo 
 dns_servers=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')
 has_docker="false"
 docker_count=0
-if command -v docker &>/dev/null; then
+DOCKER_BIN=$(command -v docker 2>/dev/null || which docker 2>/dev/null || ls /snap/bin/docker /usr/local/bin/docker /usr/bin/docker 2>/dev/null | head -1)
+if [[ -n "$DOCKER_BIN" && -x "$DOCKER_BIN" ]]; then
     has_docker="true"
-    docker_count=$(docker ps -q 2>/dev/null | wc -l || echo "0")
+    docker_count=$($DOCKER_BIN ps -q 2>/dev/null | wc -l || echo "0")
 fi
 iface_count=$(ip -br link 2>/dev/null | grep -cv '^lo ' || echo "0")
 
