@@ -96,6 +96,7 @@ fi
 # ─── Timestamp ────────────────────────────────────────────────
 
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || date +%Z)
 
 # ─── Send ─────────────────────────────────────────────────────
 
@@ -117,7 +118,8 @@ curl -sf --max-time 15 -X POST \
   \"load_1\":${load1},
   \"load_5\":${load5},
   \"load_15\":${load15},
-  \"collected_at\":\"${ts}\"
+  \"collected_at\":\"${ts}\",
+  \"timezone\":\"${tz}\"
 }" "${SERVER_URL}/?action=ingest" >/dev/null
 
 # ─── Pull config from server (auto-adjust interval) ───────────

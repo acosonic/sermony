@@ -63,6 +63,7 @@ function db(): SQLite3 {
     @$i->exec('ALTER TABLE servers ADD COLUMN interval_minutes INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN notes TEXT DEFAULT ""');
     @$i->exec('ALTER TABLE servers ADD COLUMN display_name TEXT');
+    @$i->exec('ALTER TABLE servers ADD COLUMN timezone TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_warn INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_crit INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_mem_warn INTEGER');
@@ -100,7 +101,7 @@ function migrate(SQLite3 $db): void {
         public_ip TEXT, fqdn TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         last_seen_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
-        interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT,
+        interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT, timezone TEXT,
         alert_cpu_warn INTEGER, alert_cpu_crit INTEGER,
         alert_mem_warn INTEGER, alert_mem_crit INTEGER,
         alert_disk_warn INTEGER, alert_disk_crit INTEGER,
@@ -553,10 +554,11 @@ function handleIngest(): never {
     if (!$srv) jsonErr('Unknown agent', 403);
     $id = (int)$srv['id'];
 
-    $s = $d->prepare("UPDATE servers SET public_ip=:ip, fqdn=:f, hostname=:h, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
+    $s = $d->prepare("UPDATE servers SET public_ip=:ip, fqdn=:f, hostname=:h, timezone=:tz, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
     $s->bindValue(':ip', isset($in['public_ip']) ? (string)$in['public_ip'] : null);
     $s->bindValue(':f', isset($in['fqdn']) ? (string)$in['fqdn'] : null);
     $s->bindValue(':h', trim((string)($in['hostname'] ?? '')));
+    $s->bindValue(':tz', isset($in['timezone']) ? (string)$in['timezone'] : null);
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
     $s->execute();
 
@@ -829,7 +831,7 @@ function showDashboard(): never {
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
             </div>
-            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?></div>
+            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?><?php if (!empty($srv['timezone'])): ?> &middot; <span class="tz-badge"><?=e($srv['timezone'])?></span><?php endif; ?></div>
             <div class="metrics">
                 <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu,$srv)?>"></div></div><?php endif;?></div>
                 <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem,$srv)?>"></div></div><?php endif;?></div>
@@ -1157,6 +1159,7 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .ip-copy{cursor:pointer;border-radius:3px;padding:0 .2rem;transition:background .15s}
 .ip-copy:hover{background:var(--code-bg)}
 .ip-copy small{font-size:.7rem;opacity:.5}
+.tz-badge{font-size:.7rem;color:var(--subtle);background:var(--code-bg);padding:.1rem .3rem;border-radius:3px}
 .card-foot{font-size:.75rem;color:var(--muted);margin-top:.75rem;padding-top:.5rem;border-top:1px solid var(--foot-border)}
 
 .badge{font-size:.6rem;font-weight:700;letter-spacing:.05em;padding:.15rem .4rem;border-radius:4px;text-transform:uppercase}
