@@ -803,7 +803,7 @@ function showDashboard(): never {
         <?php if ($counts['crit']): ?><span class="ss-item ss-crit ss-filter" data-filter="crit"><?=$counts['crit']?> critical</span><?php endif; ?>
         <?php if ($counts['warn']): ?><span class="ss-item ss-warn ss-filter" data-filter="warn"><?=$counts['warn']?> warning</span><?php endif; ?>
         <?php if ($counts['stale']): ?><span class="ss-item ss-stale ss-filter" data-filter="stale"><?=$counts['stale']?> stale</span><?php endif; ?>
-        <span class="ss-search">&#128269;<input type="text" id="serverSearch" placeholder="Search..." oninput="filterSearch(this.value)"></span>
+        <span class="ss-search"><input type="text" id="serverSearch" placeholder="Search servers..." oninput="filterSearch(this.value)"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg></span>
     </div>
     <?php endif; ?>
 
@@ -1253,9 +1253,10 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
 
 /* Search */
-.ss-search{display:flex;align-items:center;gap:.3rem;margin-left:auto;font-size:.8rem;color:var(--subtle)}
-.ss-search input{border:1px solid var(--card-border);border-radius:6px;padding:.15rem .4rem;font-size:.78rem;background:var(--input-bg);color:var(--text);width:120px;transition:width .2s}
-.ss-search input:focus{outline:none;border-color:var(--blue);width:180px}
+.ss-search{position:relative;display:flex;align-items:center;margin-left:auto;flex:1;max-width:280px;min-width:140px}
+.ss-search input{width:100%;border:1px solid var(--card-border);border-radius:8px;padding:.35rem .6rem;padding-right:2rem;font-size:.82rem;background:var(--input-bg);color:var(--text)}
+.ss-search input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 2px color-mix(in srgb,var(--blue) 20%,transparent)}
+.search-icon{position:absolute;right:.5rem;width:16px;height:16px;color:var(--subtle);pointer-events:none}
 
 /* Fullscreen */
 body.fullscreen .wrap{max-width:none}
