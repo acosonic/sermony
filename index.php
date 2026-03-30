@@ -1266,6 +1266,25 @@ function showSettings(): never {
             </label>
             <p style="font-size:.75rem;color:var(--subtle);margin-top:.25rem">Restricts which IPs can call the enroll and ingest endpoints. Leave empty to allow all.</p>
         </fieldset>
+
+        <?php $plugins = loadPlugins(); if (!empty($plugins)): ?>
+        <fieldset style="margin-top:1.5rem">
+            <legend>Installed Plugins (<?=count($plugins)?>)</legend>
+            <table style="width:100%;font-size:.82rem;border-collapse:collapse;margin-top:.25rem">
+                <thead><tr><th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Name</th><th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Version</th><th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Author</th><th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Hooks</th></tr></thead>
+                <tbody>
+                <?php foreach ($plugins as $p): ?>
+                <tr>
+                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($p['name'] ?? 'Unknown')?></strong></td>
+                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><?=e($p['version'] ?? '—')?></td>
+                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><?=e($p['author'] ?? '—')?></td>
+                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);font-size:.75rem;color:var(--muted)"><?=e(implode(', ', array_keys($p['hooks'] ?? [])))?></td>
+                </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </fieldset>
+        <?php endif; ?>
     </div>
     <?php
     pageBottom(); exit;
