@@ -1270,7 +1270,7 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 </head>
 <body>
 <header><div class="wrap">
-    <h1><span>&#9632;</span> Sermony</h1>
+    <h1><a href="?" style="color:inherit;text-decoration:none"><span>&#9632;</span> Sermony</a></h1>
     <div class="hdr-links">
         <?php if (isLoggedIn()): ?>
         <a href="?action=settings">Settings</a>
