@@ -806,6 +806,10 @@ function showDashboard(): never {
     </div>
     <?php endif; ?>
 
+    <?php if ($counts['total'] > 5): ?>
+    <input type="text" id="serverSearch" class="server-search" placeholder="Search servers..." oninput="filterSearch(this.value)">
+    <?php endif; ?>
+
     <?php if (empty($servers)): ?>
     <div class="empty"><h2>No servers yet</h2><p>Go to <a href="?action=settings">Settings</a> for the install command to add your first server.</p></div>
     <?php else: ?>
@@ -1163,6 +1167,7 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .ss-filter:hover{transform:scale(1.05)}
 .ss-filter.active{outline:2px solid var(--text);outline-offset:2px}
 .card.filtered-out{display:none}
+.card.search-hidden{display:none}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;margin:1.25rem 0}
 .card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;transition:box-shadow .15s,opacity .15s}
@@ -1250,6 +1255,28 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .prev-key-row{display:flex;gap:.5rem;align-items:center;margin-top:.35rem;min-width:0}
 .prev-key-row .ekey-code{opacity:.7}
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
+
+/* Search */
+.server-search{width:100%;padding:.5rem .75rem;border:1px solid var(--card-border);border-radius:8px;font-size:.85rem;background:var(--card);color:var(--text);margin-bottom:.75rem}
+.server-search:focus{outline:2px solid var(--blue);outline-offset:-1px}
+
+/* Fullscreen */
+body.fullscreen .wrap{max-width:none}
+body.fullscreen header .wrap{max-width:none}
+
+/* Compact view */
+body.compact .grid{grid-template-columns:1fr;gap:.35rem}
+body.compact .card{padding:.4rem .75rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+body.compact .card-head{margin-bottom:0;min-width:200px}
+body.compact .card-meta{margin-bottom:0;font-size:.75rem;min-width:150px}
+body.compact .metrics{display:flex;gap:.5rem;flex:1;min-width:0}
+body.compact .m{font-size:.75rem;white-space:nowrap}
+body.compact .ml{display:none}
+body.compact .mv{display:inline}
+body.compact .bar{display:none}
+body.compact .card-foot{margin-top:0;padding-top:0;border-top:none;font-size:.7rem;white-space:nowrap}
+body.compact .sparklines{display:none}
+body.compact .badge{font-size:.55rem;padding:.1rem .3rem}
 .auth-box{max-width:380px;margin:3rem auto;background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:2rem}
 .auth-box h2{margin-bottom:1rem}
 .auth-box input[type="password"]{width:100%;padding:.5rem .75rem;border:1px solid var(--input-border);border-radius:6px;font-size:.9rem;background:var(--input-bg);color:var(--text);margin-top:.25rem}
@@ -1276,6 +1303,8 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
         <a href="?action=settings">Settings</a>
         <a href="?action=logout">Logout</a>
         <?php endif; ?>
+        <button class="theme-toggle" onclick="toggleCompact()" id="compactBtn" title="Toggle compact view">&#9776;</button>
+        <button class="theme-toggle" onclick="toggleFullscreen()" id="fsBtn" title="Toggle fullscreen">&#x26F6;</button>
         <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">&#9790;</button>
         <?php if (isLoggedIn()): ?>
         <button onclick="enableNotif(this)" id="notifBtn" title="Enable browser notifications" style="display:none">&#128276;</button>
@@ -1297,6 +1326,10 @@ function updThemeBtn(){document.getElementById('themeBtn').textContent=document.
 updThemeBtn();
 function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id).textContent).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500)})}
 function copyText(t,el){navigator.clipboard.writeText(t).then(function(){var o=el.innerHTML;el.innerHTML='Copied!';setTimeout(function(){el.innerHTML=o},1200)})}
+function toggleFullscreen(){document.body.classList.toggle('fullscreen');localStorage.setItem('sermony-fs',document.body.classList.contains('fullscreen')?'1':'0')}
+function toggleCompact(){document.body.classList.toggle('compact');localStorage.setItem('sermony-compact',document.body.classList.contains('compact')?'1':'0')}
+function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('.card[data-id]').forEach(function(c){var name=c.querySelector('.card-hostname').textContent.toLowerCase();var meta=c.querySelector('.card-meta').textContent.toLowerCase();c.classList.toggle('search-hidden',q&&name.indexOf(q)<0&&meta.indexOf(q)<0)})}
+(function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact')})()
 
 /* Status filter */
 (function(){
