@@ -1166,8 +1166,7 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .ss-filter{cursor:pointer;transition:opacity .15s,transform .15s;user-select:none}
 .ss-filter:hover{transform:scale(1.05)}
 .ss-filter.active{outline:2px solid var(--text);outline-offset:2px}
-.card.filtered-out{display:none}
-.card.search-hidden{display:none}
+.card.filtered-out,.card.search-hidden{display:none!important}
 
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;margin:1.25rem 0}
 .card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;transition:box-shadow .15s,opacity .15s}
