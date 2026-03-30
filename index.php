@@ -21,6 +21,7 @@ const DEFAULTS = [
     'interval_minutes'     => '15',
     'retention_days'       => '30',
     'api_ip_allowlist'     => '',  // comma-separated, empty = allow all
+    'default_ssh_user'     => 'ubuntu',
     'alert_cpu_warn'       => '75',
     'alert_cpu_crit'       => '90',
     'alert_mem_warn'       => '75',
@@ -601,7 +602,7 @@ function handleSettings(): never {
     $intFields = ['interval_minutes','retention_days','alert_cpu_warn','alert_cpu_crit','alert_mem_warn','alert_mem_crit','alert_disk_warn','alert_disk_crit','alert_mail_warn','alert_mail_crit','alert_cooldown_minutes'];
     foreach ($intFields as $k) { if (isset($_POST[$k])) setSetting($k, (string)max(1, (int)$_POST[$k])); }
     // String settings
-    foreach (['alert_email', 'alert_webhook_url', 'api_ip_allowlist'] as $k) { if (isset($_POST[$k])) setSetting($k, trim((string)$_POST[$k])); }
+    foreach (['alert_email', 'alert_webhook_url', 'api_ip_allowlist', 'default_ssh_user'] as $k) { if (isset($_POST[$k])) setSetting($k, trim((string)$_POST[$k])); }
 
     if (!empty($_POST['regenerate_key'])) {
         $old = setting('enrollment_key');
@@ -828,7 +829,7 @@ function showDashboard(): never {
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
             </div>
-            <div class="card-meta"><?=e($srv['public_ip'] ?: "\xE2\x80\x94")?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?></div>
+            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?></div>
             <div class="metrics">
                 <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu,$srv)?>"></div></div><?php endif;?></div>
                 <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem,$srv)?>"></div></div><?php endif;?></div>
@@ -1036,6 +1037,9 @@ function showSettings(): never {
                     <label>Check Interval (minutes)<input type="number" name="interval_minutes" value="<?=e(setting('interval_minutes'))?>" min="1" max="1440"></label>
                     <label>Data Retention (days)<input type="number" name="retention_days" value="<?=e(setting('retention_days'))?>" min="1" max="3650"></label>
                 </div>
+                <label>Default SSH User (for IP copy button)
+                    <input type="text" name="default_ssh_user" value="<?=e(setting('default_ssh_user'))?>" placeholder="ubuntu">
+                </label>
             </fieldset>
 
             <div class="settings-grid">
@@ -1150,6 +1154,9 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 .card-hostname{font-weight:600;font-size:1rem;color:var(--text);text-decoration:none;flex:1}
 .card-hostname:hover{color:var(--blue)}
 .card-meta{font-size:.8rem;color:var(--muted);margin-bottom:.75rem}
+.ip-copy{cursor:pointer;border-radius:3px;padding:0 .2rem;transition:background .15s}
+.ip-copy:hover{background:var(--code-bg)}
+.ip-copy small{font-size:.7rem;opacity:.5}
 .card-foot{font-size:.75rem;color:var(--muted);margin-top:.75rem;padding-top:.5rem;border-top:1px solid var(--foot-border)}
 
 .badge{font-size:.6rem;font-weight:700;letter-spacing:.05em;padding:.15rem .4rem;border-radius:4px;text-transform:uppercase}
@@ -1261,6 +1268,7 @@ function toggleTheme(){var h=document.documentElement,c=h.getAttribute('data-the
 function updThemeBtn(){document.getElementById('themeBtn').textContent=document.documentElement.getAttribute('data-theme')==='dark'?'\u2600':'\u263E'}
 updThemeBtn();
 function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id).textContent).then(function(){btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy'},1500)})}
+function copyText(t,el){navigator.clipboard.writeText(t).then(function(){var o=el.innerHTML;el.innerHTML='Copied!';setTimeout(function(){el.innerHTML=o},1200)})}
 
 /* Status filter */
 (function(){
