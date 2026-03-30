@@ -382,7 +382,7 @@ function checkApiIpAllowlist(): void {
 
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
-header("Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'");
+header("Content-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://static.cloudflareinsights.com");
 
 $action = $_GET['action'] ?? 'dashboard';
 
@@ -1327,7 +1327,7 @@ function copyText(t,el){navigator.clipboard.writeText(t).then(function(){var o=e
 function toggleFullscreen(){document.body.classList.toggle('fullscreen');localStorage.setItem('sermony-fs',document.body.classList.contains('fullscreen')?'1':'0')}
 function toggleCompact(){document.body.classList.toggle('compact');localStorage.setItem('sermony-compact',document.body.classList.contains('compact')?'1':'0')}
 function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('.card[data-id]').forEach(function(c){var name=c.querySelector('.card-hostname').textContent.toLowerCase();var meta=c.querySelector('.card-meta').textContent.toLowerCase();c.classList.toggle('search-hidden',q&&name.indexOf(q)<0&&meta.indexOf(q)<0)})}
-(function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact')})()
+(function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact')})();
 
 /* Status filter */
 (function(){
