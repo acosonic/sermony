@@ -16,9 +16,9 @@ PUBLIC_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null \
 
 # ─── Snapshot before (CPU, network, disk I/O) ────────────────
 
-cpu_b=($(awk '/^cpu / {print $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat))
+cpu_b=($(awk '/^cpu / {printf "%d %d\n", $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat))
 
-net_b=($(awk 'NR>2 && $1!~/lo:/ {rx+=$2; tx+=$10} END {print rx+0, tx+0}' /proc/net/dev))
+net_b=($(awk 'NR>2 && $1!~/lo:/ {rx+=$2; tx+=$10} END {printf "%d %d\n", rx, tx}' /proc/net/dev))
 
 disk_rd_b=0; disk_wr_b=0
 for s in /sys/block/*/stat; do
@@ -32,9 +32,9 @@ sleep 1
 
 # ─── Snapshot after ───────────────────────────────────────────
 
-cpu_a=($(awk '/^cpu / {print $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat))
+cpu_a=($(awk '/^cpu / {printf "%d %d\n", $2+$3+$4+$5+$6+$7+$8, $5}' /proc/stat))
 
-net_a=($(awk 'NR>2 && $1!~/lo:/ {rx+=$2; tx+=$10} END {print rx+0, tx+0}' /proc/net/dev))
+net_a=($(awk 'NR>2 && $1!~/lo:/ {rx+=$2; tx+=$10} END {printf "%d %d\n", rx, tx}' /proc/net/dev))
 
 disk_rd_a=0; disk_wr_a=0
 for s in /sys/block/*/stat; do
