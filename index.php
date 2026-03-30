@@ -1275,7 +1275,7 @@ function showSettings(): never {
                 <tbody>
                 <?php foreach ($plugins as $p): ?>
                 <tr>
-                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($p['name'] ?? 'Unknown')?></strong></td>
+                    <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?php if (!empty($p['url'])): ?><a href="<?=e($p['url'])?>" target="_blank"><?=e($p['name'] ?? 'Unknown')?></a><?php else: ?><?=e($p['name'] ?? 'Unknown')?><?php endif; ?></strong></td>
                     <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><?=e($p['version'] ?? '—')?></td>
                     <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><?=e($p['author'] ?? '—')?></td>
                     <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);font-size:.75rem;color:var(--muted)"><?=e(implode(', ', array_keys($p['hooks'] ?? [])))?></td>

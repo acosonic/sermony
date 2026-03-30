@@ -50,6 +50,7 @@ return [
     'name'    => 'Credential Vault',
     'version' => '1.0',
     'author'  => 'Sermony',
+    'url'     => 'https://github.com/acosonic/sermony/tree/master/plugins/vault',
 
     'hooks' => [
 
@@ -73,6 +74,27 @@ return [
                 $enc = (string)($in['encrypted'] ?? '');
                 if ($id < 1 || $enc === '') jsonErr('Missing data');
                 vaultSave($id, $enc);
+                jsonOut(['ok' => true]);
+            }
+
+            if ($action === 'vault-all') {
+                vaultDb();
+                $res = db()->query('SELECT server_id, encrypted FROM vault');
+                $all = [];
+                while ($r = $res->fetchArray(SQLITE3_ASSOC)) $all[] = $r;
+                jsonOut(['entries' => $all]);
+            }
+
+            if ($action === 'vault-bulk-save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $in = json_decode(file_get_contents('php://input'), true);
+                if (!$in) jsonErr('Invalid JSON');
+                $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+                if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
+                foreach ($in['entries'] ?? [] as $entry) {
+                    $id = (int)($entry['server_id'] ?? 0);
+                    $enc = (string)($entry['encrypted'] ?? '');
+                    if ($id > 0 && $enc !== '') vaultSave($id, $enc);
+                }
                 jsonOut(['ok' => true]);
             }
 
@@ -255,6 +277,116 @@ return [
                 // Auto-unlock if key is in sessionStorage
                 var stored=sessionStorage.getItem(VAULT_KEY_STORAGE);
                 if(stored){document.getElementById('vaultKeyInput').value=stored;vaultUnlock()}
+            })();
+            </script>
+            <?php
+        },
+
+        // Vault key management on settings page
+        'settings_panel' => function () {
+            ?>
+            <fieldset style="margin-top:1rem">
+                <legend>Credential Vault</legend>
+                <div id="vaultSettings">
+                    <label>Vault Key (for this session)
+                        <div class="vault-field-row" style="margin-top:.25rem">
+                            <input type="password" id="settingsVaultKey" placeholder="Enter vault key..." style="flex:1;padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
+                            <button onclick="settingsVaultSet()" class="btn-sm">Set for Session</button>
+                        </div>
+                    </label>
+                    <p style="font-size:.75rem;color:var(--subtle);margin-top:.25rem">Sets the vault key in your browser session. Use this instead of entering it on each server page.</p>
+
+                    <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
+                        <strong style="font-size:.82rem">Change Vault Key</strong>
+                        <p style="font-size:.75rem;color:var(--subtle);margin:.25rem 0">Re-encrypts all stored credentials with a new key. Share the new key with your team.</p>
+                        <div style="display:flex;flex-direction:column;gap:.4rem;margin-top:.4rem">
+                            <input type="password" id="vaultOldKey" placeholder="Current vault key" style="padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
+                            <input type="password" id="vaultNewKey" placeholder="New vault key" style="padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
+                            <input type="password" id="vaultNewKey2" placeholder="Confirm new vault key" style="padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
+                            <button onclick="vaultRekey()" class="btn-sm" style="align-self:flex-start">Change Vault Key</button>
+                        </div>
+                    </div>
+                </div>
+            </fieldset>
+            <script>
+            (function(){
+                var KEY='sermony-vault-key';
+
+                // Show current status
+                var stored=sessionStorage.getItem(KEY);
+                if(stored)document.getElementById('settingsVaultKey').value=stored;
+
+                window.settingsVaultSet=function(){
+                    var pw=document.getElementById('settingsVaultKey').value;
+                    if(!pw){sessionStorage.removeItem(KEY);alert('Vault key cleared.');return}
+                    sessionStorage.setItem(KEY,pw);
+                    alert('Vault key set for this session. It will be used automatically on server pages.');
+                };
+
+                async function deriveKey(password){
+                    var enc=new TextEncoder();
+                    var km=await crypto.subtle.importKey('raw',enc.encode(password),{name:'PBKDF2'},false,['deriveKey']);
+                    return crypto.subtle.deriveKey({name:'PBKDF2',salt:enc.encode('sermony-vault-salt'),iterations:100000,hash:'SHA-256'},km,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+                }
+
+                async function decrypt(b64,key){
+                    var raw=Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)});
+                    var iv=raw.slice(0,12),ct=raw.slice(12);
+                    var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:iv},key,ct);
+                    return JSON.parse(new TextDecoder().decode(pt));
+                }
+
+                async function encrypt(data,key){
+                    var iv=crypto.getRandomValues(new Uint8Array(12));
+                    var enc=new TextEncoder();
+                    var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,enc.encode(JSON.stringify(data)));
+                    var buf=new Uint8Array(iv.length+ct.byteLength);
+                    buf.set(iv);buf.set(new Uint8Array(ct),iv.length);
+                    return btoa(String.fromCharCode.apply(null,buf));
+                }
+
+                window.vaultRekey=async function(){
+                    var oldPw=document.getElementById('vaultOldKey').value;
+                    var newPw=document.getElementById('vaultNewKey').value;
+                    var newPw2=document.getElementById('vaultNewKey2').value;
+                    if(!oldPw||!newPw){alert('Enter both old and new vault keys.');return}
+                    if(newPw!==newPw2){alert('New keys do not match.');return}
+                    if(newPw.length<4){alert('New key too short (min 4 chars).');return}
+
+                    var oldKey=await deriveKey(oldPw);
+                    var newKey=await deriveKey(newPw);
+
+                    // Fetch all encrypted entries
+                    var resp=await fetch('?action=vault-all');
+                    var data=await resp.json();
+                    if(!data.entries||!data.entries.length){alert('No credentials stored.');return}
+
+                    // Decrypt with old, re-encrypt with new
+                    var reEncrypted=[];
+                    var failed=0;
+                    for(var e of data.entries){
+                        try{
+                            var plain=await decrypt(e.encrypted,oldKey);
+                            var enc=await encrypt(plain,newKey);
+                            reEncrypted.push({server_id:e.server_id,encrypted:enc});
+                        }catch(err){failed++;console.error('Failed to re-key server',e.server_id,err)}
+                    }
+
+                    if(failed>0&&!confirm(failed+' entries could not be decrypted (wrong old key?). Save the '+reEncrypted.length+' that worked?'))return;
+                    if(reEncrypted.length===0){alert('Could not decrypt any entries. Wrong old key?');return}
+
+                    // Bulk save
+                    var saveResp=await fetch('?action=vault-bulk-save',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({entries:reEncrypted})});
+                    var r=await saveResp.json();
+                    if(r.ok){
+                        sessionStorage.setItem(KEY,newPw);
+                        alert('Vault key changed! '+reEncrypted.length+' credentials re-encrypted.'+(failed?' '+failed+' failed.':''));
+                        document.getElementById('settingsVaultKey').value=newPw;
+                        document.getElementById('vaultOldKey').value='';
+                        document.getElementById('vaultNewKey').value='';
+                        document.getElementById('vaultNewKey2').value='';
+                    }else{alert('Save failed: '+(r.error||'unknown'))}
+                };
             })();
             </script>
             <?php
