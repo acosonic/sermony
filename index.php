@@ -1253,7 +1253,7 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
 
 /* Search */
-.ss-search{position:relative;display:flex;align-items:center;margin-left:auto;flex:1;max-width:280px;min-width:140px}
+.ss-search{position:relative;display:flex;align-items:center;margin-left:auto;flex:0 1 280px;min-width:140px}
 .ss-search input{width:100%;border:1px solid var(--card-border);border-radius:8px;padding:.35rem .6rem;padding-right:2rem;font-size:.82rem;background:var(--input-bg);color:var(--text)}
 .ss-search input:focus{outline:none;border-color:var(--blue);box-shadow:0 0 0 2px color-mix(in srgb,var(--blue) 20%,transparent)}
 .search-icon{position:absolute;right:.5rem;width:16px;height:16px;color:var(--subtle);pointer-events:none}
