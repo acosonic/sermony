@@ -854,8 +854,11 @@ function showDashboard(): never {
             <thead><tr>
                 <th class="dg-sort" data-col="name" data-type="str">Name</th>
                 <th>IP</th>
+                <th class="dg-sort" data-col="cores" data-type="num">Cores</th>
                 <th class="dg-sort" data-col="cpu" data-type="num">CPU %</th>
+                <th class="dg-sort" data-col="ramgb" data-type="num">RAM</th>
                 <th class="dg-sort" data-col="mem" data-type="num">Mem %</th>
+                <th class="dg-sort" data-col="disktotal" data-type="num">Disk</th>
                 <th class="dg-sort" data-col="disk" data-type="num">Disk %</th>
                 <th class="dg-sort" data-col="iops" data-type="num">IOPS</th>
                 <th>Net &#8595;</th>
@@ -868,14 +871,22 @@ function showDashboard(): never {
             <?php foreach ($servers as $srv):
                 $on=$srv['_online']; $stale=$srv['_stale']; $health=$srv['_health'];
                 $cpu=$srv['cpu_usage']; $mem=$srv['memory_usage']; $disk=$srv['disk_usage'];
+                $si = json_decode($srv['system_info'] ?? '{}', true) ?: [];
+                $cores = (int)($si['cpu_cores'] ?? 0);
+                $ramGb = (float)($si['ram_total_gb'] ?? 0);
+                $diskTotal = (string)($si['disk_total'] ?? '');
+                $diskTotalNum = (float)preg_replace('/[^0-9.]/', '', $diskTotal);
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
             ?>
-            <tr data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>">
+            <tr data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
                 <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
                 <td><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?></td>
+                <td><?=$cores ?: "\xE2\x80\x94"?></td>
                 <td style="color:<?=$cpu!==null ? mColorFor('cpu',(float)$cpu,$srv) : 'var(--muted)'?>"><?=$cpu!==null ? number_format((float)$cpu,1) : "\xE2\x80\x94"?></td>
+                <td><?=$ramGb ? number_format($ramGb,1).' GB' : "\xE2\x80\x94"?></td>
                 <td style="color:<?=$mem!==null ? mColorFor('mem',(float)$mem,$srv) : 'var(--muted)'?>"><?=$mem!==null ? number_format((float)$mem,1) : "\xE2\x80\x94"?></td>
+                <td><?=$diskTotal ?: "\xE2\x80\x94"?></td>
                 <td style="color:<?=$disk!==null ? mColorFor('disk',(float)$disk,$srv) : 'var(--muted)'?>"><?=$disk!==null ? number_format((float)$disk,1) : "\xE2\x80\x94"?></td>
                 <td><?=$srv['disk_iops']!==null ? number_format((float)$srv['disk_iops'],0) : "\xE2\x80\x94"?></td>
                 <td><?=$srv['network_rx_bps']!==null ? fmtBytes((int)$srv['network_rx_bps']).'/s' : "\xE2\x80\x94"?></td>
