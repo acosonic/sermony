@@ -820,7 +820,7 @@ function showDashboard(): never {
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
         ?>
-        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" draggable="true">
+        <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" draggable="true">
             <div class="card-head">
                 <span class="dot <?=$on ? ($stale ? 'dot-stale' : 'dot-on') : 'dot-off'?>"></span>
                 <a href="?action=server&id=<?=$srv['id']?>" class="card-hostname" <?php if(!empty($srv['notes'])):?>title="<?=e($srv['notes'])?>"<?php endif;?>><?=e($srv['display_name'] ?: $srv['hostname'])?></a>
@@ -848,6 +848,45 @@ function showDashboard(): never {
             <div class="card-foot"><?=$on ? ($stale ? 'Stale' : 'Online') : 'Offline'?> &middot; <?=timeAgo($srv['last_seen_at'])?></div>
         </div>
         <?php endforeach; ?>
+    </div>
+    <div class="datagrid" id="datagrid" style="display:none">
+        <table>
+            <thead><tr>
+                <th class="dg-sort" data-col="name" data-type="str">Name</th>
+                <th>IP</th>
+                <th class="dg-sort" data-col="cpu" data-type="num">CPU %</th>
+                <th class="dg-sort" data-col="mem" data-type="num">Mem %</th>
+                <th class="dg-sort" data-col="disk" data-type="num">Disk %</th>
+                <th class="dg-sort" data-col="iops" data-type="num">IOPS</th>
+                <th>Net &#8595;</th>
+                <th>Net &#8593;</th>
+                <th>Mail Q</th>
+                <th class="dg-sort" data-col="load" data-type="num">Load</th>
+                <th>Status</th>
+            </tr></thead>
+            <tbody>
+            <?php foreach ($servers as $srv):
+                $on=$srv['_online']; $stale=$srv['_stale']; $health=$srv['_health'];
+                $cpu=$srv['cpu_usage']; $mem=$srv['memory_usage']; $disk=$srv['disk_usage'];
+                $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
+                $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
+            ?>
+            <tr data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>">
+                <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
+                <td><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?></td>
+                <td style="color:<?=$cpu!==null ? mColorFor('cpu',(float)$cpu,$srv) : 'var(--muted)'?>"><?=$cpu!==null ? number_format((float)$cpu,1) : "\xE2\x80\x94"?></td>
+                <td style="color:<?=$mem!==null ? mColorFor('mem',(float)$mem,$srv) : 'var(--muted)'?>"><?=$mem!==null ? number_format((float)$mem,1) : "\xE2\x80\x94"?></td>
+                <td style="color:<?=$disk!==null ? mColorFor('disk',(float)$disk,$srv) : 'var(--muted)'?>"><?=$disk!==null ? number_format((float)$disk,1) : "\xE2\x80\x94"?></td>
+                <td><?=$srv['disk_iops']!==null ? number_format((float)$srv['disk_iops'],0) : "\xE2\x80\x94"?></td>
+                <td><?=$srv['network_rx_bps']!==null ? fmtBytes((int)$srv['network_rx_bps']).'/s' : "\xE2\x80\x94"?></td>
+                <td><?=$srv['network_tx_bps']!==null ? fmtBytes((int)$srv['network_tx_bps']).'/s' : "\xE2\x80\x94"?></td>
+                <td style="color:<?=$srv['mail_queue']!==null ? mColorFor('mail',(float)$srv['mail_queue'],$srv) : 'var(--muted)'?>"><?=$srv['mail_queue']!==null ? (int)$srv['mail_queue'] : "\xE2\x80\x94"?></td>
+                <td><?=$srv['load_1']!==null ? number_format((float)$srv['load_1'],2) : "\xE2\x80\x94"?></td>
+                <td><?php if ($statusCls): ?><span class="badge <?=$statusCls?>"><?=$statusTxt?></span><?php else: ?><span style="color:var(--green)">OK</span><?php endif; ?></td>
+            </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
     </div>
     <?php endif;
     pageBottom(); exit;
@@ -1307,6 +1346,18 @@ input[type="number"],input[type="text"]{width:100%;padding:.4rem .6rem;border:1p
 .prev-key-row .ekey-code{opacity:.7}
 .empty{text-align:center;padding:3rem 1rem;color:var(--muted)} .empty h2{color:var(--text);margin-bottom:.5rem}
 
+/* Datagrid */
+.datagrid{overflow-x:auto;margin:1.25rem 0;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
+.datagrid table{width:100%;border-collapse:collapse;font-size:.82rem}
+.datagrid th{background:var(--table-head);font-weight:600;text-align:left;padding:.5rem .6rem;border-bottom:2px solid var(--table-border);white-space:nowrap;font-size:.75rem;text-transform:uppercase;letter-spacing:.02em}
+.datagrid td{padding:.4rem .6rem;border-bottom:1px solid var(--table-row-border);white-space:nowrap}
+.datagrid tr:hover td{background:var(--table-hover)}
+.datagrid a{text-decoration:none;font-weight:600}
+.dg-sort{cursor:pointer;user-select:none}
+.dg-sort:hover{color:var(--blue)}
+.dg-sort.sort-asc::after{content:" \\25B2";font-size:.6rem}
+.dg-sort.sort-desc::after{content:" \\25BC";font-size:.6rem}
+
 /* Search */
 .ss-search{position:relative;display:flex;align-items:center;margin-left:auto;flex:0 1 280px;min-width:140px}
 .ss-search input{width:100%;border:1px solid var(--card-border);border-radius:8px;padding:.35rem .6rem;padding-right:2rem;font-size:.82rem;background:var(--input-bg);color:var(--text)}
@@ -1356,6 +1407,7 @@ body.compact .badge{font-size:.55rem;padding:.1rem .3rem}
         <a href="?action=settings">Settings</a>
         <a href="?action=logout">Logout</a>
         <?php endif; ?>
+        <button class="theme-toggle" onclick="toggleDatagrid()" id="dgBtn" title="Toggle table view">&#x2637;</button>
         <button class="theme-toggle" onclick="toggleCompact()" id="compactBtn" title="Toggle compact view">&#9776;</button>
         <button class="theme-toggle" onclick="toggleFullscreen()" id="fsBtn" title="Toggle fullscreen">&#x26F6;</button>
         <button class="theme-toggle" onclick="toggleTheme()" id="themeBtn">&#9790;</button>
@@ -1381,9 +1433,30 @@ function copyEl(id,btn){navigator.clipboard.writeText(document.getElementById(id
 function copyText(t,el){navigator.clipboard.writeText(t).then(function(){var o=el.innerHTML;el.innerHTML='Copied!';setTimeout(function(){el.innerHTML=o},1200)})}
 function toggleFullscreen(){document.body.classList.toggle('fullscreen');localStorage.setItem('sermony-fs',document.body.classList.contains('fullscreen')?'1':'0')}
 function toggleCompact(){document.body.classList.toggle('compact');localStorage.setItem('sermony-compact',document.body.classList.contains('compact')?'1':'0')}
-function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('.card[data-id]').forEach(function(c){var name=c.querySelector('.card-hostname').textContent.toLowerCase();var meta=c.querySelector('.card-meta').textContent.toLowerCase();c.classList.toggle('search-hidden',q&&name.indexOf(q)<0&&meta.indexOf(q)<0)})}
-(function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact')})();
+function filterSearch(q){q=q.toLowerCase();document.querySelectorAll('.card[data-id]').forEach(function(c){var name=c.querySelector('.card-hostname').textContent.toLowerCase();var meta=c.querySelector('.card-meta').textContent.toLowerCase();c.classList.toggle('search-hidden',q&&name.indexOf(q)<0&&meta.indexOf(q)<0)});var dg=document.getElementById('datagrid');if(dg)dg.querySelectorAll('tbody tr').forEach(function(r){var t=r.textContent.toLowerCase();r.style.display=q&&t.indexOf(q)<0?'none':''})}
+function toggleDatagrid(){var g=document.getElementById('serverGrid'),d=document.getElementById('datagrid');if(!g||!d)return;var show=d.style.display==='none';d.style.display=show?'':'none';g.style.display=show?'none':'';localStorage.setItem('sermony-dg',show?'1':'0')}
+(function(){if(localStorage.getItem('sermony-fs')==='1')document.body.classList.add('fullscreen');if(localStorage.getItem('sermony-compact')==='1')document.body.classList.add('compact');if(localStorage.getItem('sermony-dg')==='1'){var g=document.getElementById('serverGrid'),d=document.getElementById('datagrid');if(g&&d){d.style.display='';g.style.display='none'}}})();
 
+/* Datagrid sort */
+(function(){
+    var dg=document.getElementById('datagrid');if(!dg)return;
+    dg.querySelectorAll('.dg-sort').forEach(function(th){
+        th.addEventListener('click',function(){
+            var col=th.dataset.col,type=th.dataset.type,tbody=dg.querySelector('tbody');
+            var rows=Array.from(tbody.querySelectorAll('tr'));
+            var asc=!th.classList.contains('sort-asc');
+            dg.querySelectorAll('.dg-sort').forEach(function(x){x.classList.remove('sort-asc','sort-desc')});
+            th.classList.add(asc?'sort-asc':'sort-desc');
+            rows.sort(function(a,b){
+                var va=type==='num'?parseFloat(a.dataset[col]||'-1'):a.dataset[col]||'';
+                var vb=type==='num'?parseFloat(b.dataset[col]||'-1'):b.dataset[col]||'';
+                if(type==='num')return asc?va-vb:vb-va;
+                return asc?va.localeCompare(vb):vb.localeCompare(va);
+            });
+            rows.forEach(function(r){tbody.appendChild(r)});
+        });
+    });
+})();
 /* Status filter */
 (function(){
     var filters=document.querySelectorAll('.ss-filter');
