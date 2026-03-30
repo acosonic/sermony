@@ -450,8 +450,11 @@ match ($action) {
     'export-csv'     => handleExportCsv(),
     'settings'       => ($_SERVER['REQUEST_METHOD'] === 'POST' ? handleSettings() : showSettings()),
     'server'         => showServer(),
-    default          => showDashboard(),
+    default          => null,
 };
+// Let plugins handle custom actions (they can exit/jsonOut to stop further processing)
+doHook('custom_action', $action);
+showDashboard();
 
 // ─── Auth Handlers ───────────────────────────────────────────
 
