@@ -64,6 +64,7 @@ function db(): SQLite3 {
     @$i->exec('ALTER TABLE servers ADD COLUMN notes TEXT DEFAULT ""');
     @$i->exec('ALTER TABLE servers ADD COLUMN display_name TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN timezone TEXT');
+    @$i->exec('ALTER TABLE servers ADD COLUMN system_info TEXT');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_warn INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_cpu_crit INTEGER');
     @$i->exec('ALTER TABLE servers ADD COLUMN alert_mem_warn INTEGER');
@@ -101,7 +102,7 @@ function migrate(SQLite3 $db): void {
         public_ip TEXT, fqdn TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
         last_seen_at TEXT, sort_order INTEGER NOT NULL DEFAULT 0,
-        interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT, timezone TEXT,
+        interval_minutes INTEGER, notes TEXT DEFAULT "", display_name TEXT, timezone TEXT, system_info TEXT,
         alert_cpu_warn INTEGER, alert_cpu_crit INTEGER,
         alert_mem_warn INTEGER, alert_mem_crit INTEGER,
         alert_disk_warn INTEGER, alert_disk_crit INTEGER,
@@ -554,11 +555,12 @@ function handleIngest(): never {
     if (!$srv) jsonErr('Unknown agent', 403);
     $id = (int)$srv['id'];
 
-    $s = $d->prepare("UPDATE servers SET public_ip=:ip, fqdn=:f, hostname=:h, timezone=:tz, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
+    $s = $d->prepare("UPDATE servers SET public_ip=:ip, fqdn=:f, hostname=:h, timezone=:tz, system_info=:si, last_seen_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
     $s->bindValue(':ip', isset($in['public_ip']) ? (string)$in['public_ip'] : null);
     $s->bindValue(':f', isset($in['fqdn']) ? (string)$in['fqdn'] : null);
     $s->bindValue(':h', trim((string)($in['hostname'] ?? '')));
     $s->bindValue(':tz', isset($in['timezone']) ? (string)$in['timezone'] : null);
+    $s->bindValue(':si', isset($in['system_info']) ? json_encode($in['system_info']) : null);
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
     $s->execute();
 
@@ -885,6 +887,24 @@ function showServer(): never {
             <span><strong>Last seen:</strong> <?=timeAgo($srv['last_seen_at'])?></span>
             <span><strong>Interval:</strong> <?=$srv['interval_minutes']!==null ? $srv['interval_minutes'].'m (custom)' : (setting('interval_minutes')??15).'m (global)'?></span>
         </div>
+        <?php
+        $sysInfo = json_decode($srv['system_info'] ?? '{}', true) ?: [];
+        if (!empty($sysInfo)): ?>
+        <div class="sys-info">
+            <div class="sys-info-grid">
+                <?php if (!empty($sysInfo['cpu_model'])): ?><div><span class="sys-label">CPU</span><span class="sys-val"><?=e($sysInfo['cpu_model'])?> (<?=(int)($sysInfo['cpu_cores'] ?? 0)?> cores)</span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['ram_total_gb'])): ?><div><span class="sys-label">RAM</span><span class="sys-val"><?=e($sysInfo['ram_total_gb'])?> GB</span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['disk_total'])): ?><div><span class="sys-label">Disk</span><span class="sys-val"><?=e($sysInfo['disk_total'])?> total</span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['os'])): ?><div><span class="sys-label">OS</span><span class="sys-val"><?=e($sysInfo['os'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['kernel'])): ?><div><span class="sys-label">Kernel</span><span class="sys-val"><?=e($sysInfo['kernel'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['uptime'])): ?><div><span class="sys-label">Uptime</span><span class="sys-val"><?=e($sysInfo['uptime'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['net_interfaces'])): ?><div><span class="sys-label">Interfaces (<?=(int)($sysInfo['iface_count'] ?? 0)?>)</span><span class="sys-val"><?=e($sysInfo['net_interfaces'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['net_speed'])): ?><div><span class="sys-label">Link Speed</span><span class="sys-val"><?=e($sysInfo['net_speed'])?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['dns_servers'])): ?><div><span class="sys-label">DNS</span><span class="sys-val"><?=e($sysInfo['dns_servers'])?></span></div><?php endif; ?>
+                <div><span class="sys-label">Docker</span><span class="sys-val"><?=!empty($sysInfo['docker']) ? 'Yes (' . (int)($sysInfo['docker_containers'] ?? 0) . ' running)' : 'No'?></span></div>
+            </div>
+        </div>
+        <?php endif; ?>
         <?php if (isset($_GET['saved'])): ?><div class="alert-ok" style="margin-top:.5rem">Server settings saved.</div><?php endif; ?>
         <form method="post" action="?action=update-server">
             <?=csrfField()?><input type="hidden" name="id" value="<?=$srv['id']?>">
@@ -1204,6 +1224,11 @@ th{background:var(--table-head);font-weight:600;text-align:left;padding:.6rem .7
 td{padding:.5rem .75rem;border-bottom:1px solid var(--table-row-border);white-space:nowrap}
 tr:hover td{background:var(--table-hover)}
 
+.sys-info{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)}
+.sys-info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.35rem .75rem;font-size:.82rem}
+.sys-info-grid>div{display:flex;gap:.4rem;align-items:baseline}
+.sys-label{color:var(--muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;min-width:5rem}
+.sys-val{color:var(--text);word-break:break-word}
 .server-settings{margin-top:.5rem}
 .srv-thresholds{margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)}
 .thresh-hint{font-size:.78rem;color:var(--subtle);font-style:italic}

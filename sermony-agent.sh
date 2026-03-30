@@ -98,6 +98,27 @@ fi
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 tz=$(cat /etc/timezone 2>/dev/null || timedatectl show -p Timezone --value 2>/dev/null || date +%Z)
 
+# ─── System info (hardware & config snapshot) ─────────────────
+
+cpu_cores=$(nproc 2>/dev/null || grep -c '^processor' /proc/cpuinfo 2>/dev/null || echo "0")
+cpu_model=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | sed 's/.*: //' || echo "")
+ram_total_gb=$(awk '/^MemTotal:/ {printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)
+disk_total=$(df -h / 2>/dev/null | awk 'NR==2 {print $2}')
+os_name=$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || uname -sr)
+kernel=$(uname -r)
+uptime_str=$(uptime -p 2>/dev/null | sed 's/^up //' || echo "")
+net_ifaces=$(ip -br link 2>/dev/null | grep -v '^lo ' | awk '{print $1}' | tr '\n' ', ' | sed 's/,$//')
+net_speed=$(ethtool eth0 2>/dev/null | grep -i speed | awk '{print $2}' || echo "")
+[[ -z "$net_speed" ]] && net_speed=$(ethtool ens3 2>/dev/null | grep -i speed | awk '{print $2}' || echo "")
+dns_servers=$(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')
+has_docker="false"
+docker_count=0
+if command -v docker &>/dev/null; then
+    has_docker="true"
+    docker_count=$(docker ps -q 2>/dev/null | wc -l || echo "0")
+fi
+iface_count=$(ip -br link 2>/dev/null | grep -cv '^lo ' || echo "0")
+
 # ─── Send ─────────────────────────────────────────────────────
 
 curl -sf --max-time 15 -X POST \
@@ -119,7 +140,22 @@ curl -sf --max-time 15 -X POST \
   \"load_5\":${load5},
   \"load_15\":${load15},
   \"collected_at\":\"${ts}\",
-  \"timezone\":\"${tz}\"
+  \"timezone\":\"${tz}\",
+  \"system_info\":{
+    \"cpu_cores\":${cpu_cores},
+    \"cpu_model\":\"${cpu_model}\",
+    \"ram_total_gb\":${ram_total_gb:-0},
+    \"disk_total\":\"${disk_total}\",
+    \"os\":\"${os_name}\",
+    \"kernel\":\"${kernel}\",
+    \"uptime\":\"${uptime_str}\",
+    \"net_interfaces\":\"${net_ifaces}\",
+    \"net_speed\":\"${net_speed}\",
+    \"iface_count\":${iface_count},
+    \"dns_servers\":\"${dns_servers}\",
+    \"docker\":${has_docker},
+    \"docker_containers\":${docker_count}
+  }
 }" "${SERVER_URL}/?action=ingest" >/dev/null
 
 # ─── Pull config from server (auto-adjust interval) ───────────
