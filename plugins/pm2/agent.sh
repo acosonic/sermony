@@ -26,19 +26,46 @@ for pm2dir in /home/*/.pm2 /root/.pm2; do
     done
     [[ -z "$pm2bin" ]] && continue
 
-    # Run pm2 jlist as the user — must set PATH via env so sudo doesn't strip it
     nodedir=$(dirname "$pm2bin")
+
+    # Try jlist first (works when CLI and daemon versions match)
     jlist=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" jlist 2>/dev/null || echo "[]")
 
-    # Skip if empty or just []
-    [[ "$jlist" == "[]" || -z "$jlist" ]] && continue
+    # If jlist is empty or just [], fall back to parsing pm2 list table output
+    if [[ "$jlist" == "[]" || "$jlist" == "" || "$jlist" == "[]
+" ]]; then
+        # Parse the table output from pm2 list
+        listout=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" list --no-color 2>/dev/null || echo "")
 
+        if [[ -n "$listout" ]]; then
+            while IFS= read -r line; do
+                # Parse table rows: │ id │ name │ ns │ ver │ mode │ pid │ uptime │ restarts │ status │ cpu │ mem │ user │ watching │
+                pname=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$3); print $3}')
+                pstatus=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$10); print $10}')
+                pcpu=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$11); gsub(/%/,""); print $11}')
+                pmem=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$12); print $12}')
+                prestart=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$9); print $9}')
+                puptime=$(echo "$line" | awk -F'│' '{gsub(/^[ \t]+|[ \t]+$/,"",$8); print $8}')
+
+                [[ -z "$pname" || "$pname" == "name" ]] && continue
+
+                # Sanitize
+                pname=$(echo "$pname" | tr -cd '[:alnum:]._- ')
+
+                [[ $first -eq 0 ]] && pm2_json+=","
+                pm2_json+="{\"name\":\"${pname}\",\"user\":\"${pm2user}\",\"status\":\"${pstatus}\",\"cpu\":\"${pcpu}\",\"mem\":\"${pmem}\",\"restarts\":\"${prestart}\",\"uptime\":\"${puptime}\",\"script\":\"\"}"
+                first=0
+            done < <(echo "$listout" | grep -E "online|stopped|errored")
+        fi
+        continue
+    fi
+
+    # Parse jlist JSON output
     while IFS='|' read -r pname pstatus pcpu pmem prestart puptime pscript; do
         [[ -z "$pname" ]] && continue
-        [[ $first -eq 0 ]] && pm2_json+=","
-        # Sanitize name for JSON safety
-        pname=$(echo "$pname" | tr -cd '[:alnum:]._-')
+        pname=$(echo "$pname" | tr -cd '[:alnum:]._- ')
         pscript=$(echo "$pscript" | tr -cd '[:alnum:]._/:-')
+        [[ $first -eq 0 ]] && pm2_json+=","
         pm2_json+="{\"name\":\"${pname}\",\"user\":\"${pm2user}\",\"status\":\"${pstatus}\",\"cpu\":\"${pcpu}\",\"mem\":\"${pmem}\",\"restarts\":\"${prestart}\",\"uptime\":\"${puptime}\",\"script\":\"${pscript}\"}"
         first=0
     done < <(echo "$jlist" | python3 -c "
