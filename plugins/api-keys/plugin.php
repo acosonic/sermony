@@ -297,13 +297,16 @@ return [
                         document.getElementById('akBudget').value=data.monthly_budget||'';
                         document.getElementById('akNotes').value=data.notes||'';
                         // Set selected servers
-                        var srvs=data.servers?JSON.parse(data.servers||'[]'):[];
+                        var srvs=data.servers||[];
+                        if(typeof srvs==='string')try{srvs=JSON.parse(srvs)}catch(e){srvs=[]}
                         var sel=document.getElementById('akServers');
-                        for(var o of sel.options)o.selected=srvs.indexOf(parseInt(o.value))>=0||srvs.indexOf(o.value)>=0;
+                        for(var o of sel.options)o.selected=srvs.indexOf(parseInt(o.value))>=0;
                         // Set paths
-                        var paths=data.paths?JSON.parse(data.paths||'[]'):[];
+                        var paths=data.paths||[];
+                        if(typeof paths==='string')try{paths=JSON.parse(paths)}catch(e){paths=[]}
                         document.getElementById('akPaths').value=paths.join('\n');
                         document.getElementById('akForm').style.display='';
+                        document.getElementById('akForm').scrollIntoView({behavior:'smooth'});
                     };
 
                     window.akCancelForm=function(){document.getElementById('akForm').style.display='none'};
