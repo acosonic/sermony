@@ -422,6 +422,8 @@ match ($action) {
     'enroll'         => (function(){ checkApiIpAllowlist(); handleEnroll(); })(),
     'ingest'         => (function(){ checkApiIpAllowlist(); handleIngest(); })(),
     'agent-config'   => (function(){ checkApiIpAllowlist(); handleAgentConfig(); })(),
+    'plugin-data'    => (function(){ checkApiIpAllowlist(); handlePluginData(); })(),
+    'plugin-agent'   => servePluginAgent(),
     'install-script' => serveScript('install.sh'),
     'agent-script'   => serveScript('sermony-agent.sh'),
     default          => null,
@@ -792,6 +794,45 @@ function handleDashboardJson(): never {
     jsonOut(['servers' => $out, 'ts' => time()]);
 }
 
+/** Receives data from plugin agents, stores in plugin_data table */
+function handlePluginData(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') jsonErr('POST required', 405);
+    $in = json_decode(file_get_contents('php://input'), true);
+    if (!$in) jsonErr('Invalid JSON');
+    $ak = (string)($in['agent_key'] ?? '');
+    if ($ak === '') jsonErr('Missing agent_key', 401);
+    $d = db();
+    $s = $d->prepare('SELECT id FROM servers WHERE agent_key=:k');
+    $s->bindValue(':k', $ak, SQLITE3_TEXT);
+    $srv = $s->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$srv) jsonErr('Unknown agent', 403);
+    $plugin = preg_replace('/[^a-z0-9_-]/', '', (string)($in['plugin'] ?? ''));
+    if ($plugin === '') jsonErr('Missing plugin name');
+    @$d->exec('CREATE TABLE IF NOT EXISTS plugin_data (
+        server_id INTEGER NOT NULL, plugin TEXT NOT NULL, data TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
+        PRIMARY KEY (server_id, plugin),
+        FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE
+    )');
+    $s = $d->prepare('INSERT INTO plugin_data (server_id, plugin, data) VALUES (:sid, :p, :d) ON CONFLICT(server_id, plugin) DO UPDATE SET data=:d, updated_at=strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')');
+    $s->bindValue(':sid', (int)$srv['id'], SQLITE3_INTEGER);
+    $s->bindValue(':p', $plugin, SQLITE3_TEXT);
+    $s->bindValue(':d', json_encode($in['data']), SQLITE3_TEXT);
+    $s->execute();
+    jsonOut(['ok' => true]);
+}
+
+/** Serves plugin agent scripts: ?action=plugin-agent&plugin=pm2 */
+function servePluginAgent(): never {
+    $plugin = preg_replace('/[^a-z0-9_-]/', '', (string)($_GET['plugin'] ?? ''));
+    if ($plugin === '') { http_response_code(400); echo 'Missing plugin name'; exit; }
+    $path = __DIR__ . '/plugins/' . $plugin . '/agent.sh';
+    if (!file_exists($path)) { http_response_code(404); echo 'Plugin agent not found'; exit; }
+    header('Content-Type: text/plain; charset=utf-8');
+    readfile($path);
+    exit;
+}
+
 function serveScript(string $file): never {
     $path = __DIR__ . '/' . $file;
     if (!file_exists($path)) { http_response_code(404); echo 'File not found.'; exit; }
@@ -862,6 +903,7 @@ function showDashboard(): never {
             if (!empty($si['docker'])) $searchParts[] = 'docker';
             foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
             foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $searchParts[] = $nic['name'] ?? ''; }
+            $searchParts = doHookFilter('search_data', $searchParts, $srv);
             $searchStr = e(strtolower(implode(' ', array_filter($searchParts))));
         ?>
         <div class="<?=$cls?>" data-id="<?=$srv['id']?>" data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health === 'crit' ? 'crit' : ($health === 'warn' ? 'warn' : 'online')))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-search="<?=$searchStr?>" draggable="true">
@@ -929,6 +971,7 @@ function showDashboard(): never {
                 if (!empty($si['docker'])) $dgSearch[] = 'docker';
                 foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
                 foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $dgSearch[] = $nic['name'] ?? ''; }
+                $dgSearch = doHookFilter('search_data', $dgSearch, $srv);
             ?>
             <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-search="<?=e(strtolower(implode(' ', array_filter($dgSearch))))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
                 <td><a href="?action=server&id=<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></a></td>
