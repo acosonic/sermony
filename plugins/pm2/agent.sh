@@ -26,10 +26,9 @@ for pm2dir in /home/*/.pm2 /root/.pm2; do
     done
     [[ -z "$pm2bin" ]] && continue
 
-    # Run pm2 jlist as the user with proper HOME and PATH
-    # Need to set PATH to include the node binary dir for pm2 to work
+    # Run pm2 jlist as the user — must set PATH via env so sudo doesn't strip it
     nodedir=$(dirname "$pm2bin")
-    jlist=$(sudo -u "$pm2user" HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:${PATH}" "$pm2bin" jlist 2>/dev/null || echo "[]")
+    jlist=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" jlist 2>/dev/null || echo "[]")
 
     # Skip if empty or just []
     [[ "$jlist" == "[]" || -z "$jlist" ]] && continue
