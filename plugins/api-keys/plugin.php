@@ -306,7 +306,7 @@ return [
                         if(typeof paths==='string')try{paths=JSON.parse(paths)}catch(e){paths=[]}
                         document.getElementById('akPaths').value=paths.join('\n');
                         document.getElementById('akForm').style.display='';
-                        document.getElementById('akForm').scrollIntoView({behavior:'smooth'});
+                        window.scrollTo({top:document.getElementById('akForm').offsetTop-80,behavior:'smooth'});
                     };
 
                     window.akCancelForm=function(){document.getElementById('akForm').style.display='none'};
