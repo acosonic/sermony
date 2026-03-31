@@ -119,46 +119,56 @@ return [
                             <button onclick="akShowForm()" class="btn-primary" style="padding:.4rem 1rem;font-size:.85rem">+ Add Key</button>
                         </div>
 
-                        <!-- Key form (hidden by default) -->
-                        <div id="akForm" style="display:none;margin-bottom:1rem;padding:1rem;border:1px solid var(--card-border);border-radius:8px;background:var(--card)">
-                            <input type="hidden" id="akEditId" value="0">
-                            <div class="field-row">
-                                <label>Name <input type="text" id="akName" placeholder="AWS Production"></label>
-                                <label>Provider <input type="text" id="akProvider" placeholder="AWS, Cloudflare, Stripe..."></label>
-                            </div>
-                            <div class="field-row" style="margin-top:.5rem">
-                                <label>API Key / Secret
-                                    <div style="display:flex;gap:.4rem">
-                                        <input type="password" id="akKeyValue" placeholder="AKIA... or sk-..." style="flex:1">
-                                        <button onclick="akToggleKey()" class="btn-sm">Show</button>
+                        <!-- Modal -->
+                        <div id="akModal" class="ak-modal-overlay" style="display:none" onclick="if(event.target===this)akCloseModal()">
+                            <div class="ak-modal">
+                                <div class="ak-modal-header">
+                                    <strong id="akModalTitle">Add API Key</strong>
+                                    <button onclick="akCloseModal()" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--muted)">&times;</button>
+                                </div>
+                                <div class="ak-modal-body">
+                                    <input type="hidden" id="akEditId" value="0">
+                                    <input type="hidden" id="akReadOnly" value="0">
+                                    <div class="field-row">
+                                        <label>Name <input type="text" id="akName" placeholder="AWS Production"></label>
+                                        <label>Provider <input type="text" id="akProvider" placeholder="AWS, Cloudflare, Stripe..."></label>
                                     </div>
-                                </label>
-                                <label>Purpose <input type="text" id="akPurpose" placeholder="Email sending, backups..."></label>
-                            </div>
-                            <div class="field-row" style="margin-top:.5rem">
-                                <label>Issued Date <input type="date" id="akIssued"></label>
-                                <label>Expires Date <input type="date" id="akExpires"></label>
-                            </div>
-                            <div class="field-row" style="margin-top:.5rem">
-                                <label>Cost Tracking URL <input type="text" id="akCostUrl" placeholder="https://console.aws.amazon.com/billing/..."></label>
-                                <label>Monthly Budget ($) <input type="number" id="akBudget" step="0.01" placeholder="0.00"></label>
-                            </div>
-                            <label style="margin-top:.5rem">Servers Used On
-                                <select id="akServers" multiple style="width:100%;min-height:80px;padding:.3rem;border:1px solid var(--input-border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:.82rem">
-                                    <?php foreach ($servers as $srv): ?>
-                                    <option value="<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </label>
-                            <label style="margin-top:.5rem">Paths / Folders (one per line)
-                                <textarea id="akPaths" rows="2" placeholder="/var/www/app/.env&#10;/opt/service/config.json" style="width:100%;padding:.3rem .5rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text);font-family:inherit"></textarea>
-                            </label>
-                            <label style="margin-top:.5rem">Notes
-                                <textarea id="akNotes" rows="2" placeholder="Additional info..." style="width:100%;padding:.3rem .5rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text);font-family:inherit"></textarea>
-                            </label>
-                            <div style="display:flex;gap:.5rem;margin-top:.75rem">
-                                <button onclick="akSave()" class="btn-primary" style="padding:.4rem 1rem;font-size:.85rem">Save</button>
-                                <button onclick="akCancelForm()" class="btn-secondary" style="padding:.4rem 1rem;font-size:.85rem">Cancel</button>
+                                    <div class="field-row" style="margin-top:.5rem">
+                                        <label>API Key / Secret
+                                            <div style="display:flex;gap:.4rem">
+                                                <input type="password" id="akKeyValue" placeholder="AKIA... or sk-..." style="flex:1">
+                                                <button onclick="akToggleKey()" class="btn-sm">Show</button>
+                                                <button onclick="navigator.clipboard.writeText(document.getElementById('akKeyValue').value)" class="btn-sm">Copy</button>
+                                            </div>
+                                        </label>
+                                        <label>Purpose <input type="text" id="akPurpose" placeholder="Email sending, backups..."></label>
+                                    </div>
+                                    <div class="field-row" style="margin-top:.5rem">
+                                        <label>Issued Date <input type="date" id="akIssued"></label>
+                                        <label>Expires Date <input type="date" id="akExpires"></label>
+                                    </div>
+                                    <div class="field-row" style="margin-top:.5rem">
+                                        <label>Cost Tracking URL <input type="text" id="akCostUrl" placeholder="https://console.aws.amazon.com/billing/..."></label>
+                                        <label>Monthly Budget ($) <input type="number" id="akBudget" step="0.01" placeholder="0.00"></label>
+                                    </div>
+                                    <label style="margin-top:.5rem">Servers Used On
+                                        <select id="akServers" multiple style="width:100%;min-height:80px;padding:.3rem;border:1px solid var(--input-border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:.82rem">
+                                            <?php foreach ($servers as $srv): ?>
+                                            <option value="<?=$srv['id']?>"><?=e($srv['display_name'] ?: $srv['hostname'])?></option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                    </label>
+                                    <label style="margin-top:.5rem">Paths / Folders (one per line)
+                                        <textarea id="akPaths" rows="2" placeholder="/var/www/app/.env&#10;/opt/service/config.json" style="width:100%;padding:.3rem .5rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text);font-family:inherit"></textarea>
+                                    </label>
+                                    <label style="margin-top:.5rem">Notes
+                                        <textarea id="akNotes" rows="2" placeholder="Additional info..." style="width:100%;padding:.3rem .5rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text);font-family:inherit"></textarea>
+                                    </label>
+                                </div>
+                                <div class="ak-modal-footer" id="akModalFooter">
+                                    <button onclick="akSave()" class="btn-primary" style="padding:.4rem 1rem;font-size:.85rem">Save</button>
+                                    <button onclick="akCloseModal()" class="btn-secondary" style="padding:.4rem 1rem;font-size:.85rem">Cancel</button>
+                                </div>
                             </div>
                         </div>
 
@@ -168,6 +178,12 @@ return [
                 </div>
 
                 <style>
+                .ak-modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem}
+                .ak-modal{background:var(--card);border:1px solid var(--card-border);border-radius:12px;width:100%;max-width:640px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+                .ak-modal-header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.25rem;border-bottom:1px solid var(--card-border)}
+                .ak-modal-body{padding:1rem 1.25rem;overflow-y:auto;flex:1}
+                .ak-modal-footer{display:flex;gap:.5rem;padding:.75rem 1.25rem;border-top:1px solid var(--card-border)}
+                .ak-modal-body input:read-only,.ak-modal-body textarea:read-only,.ak-modal-body select:disabled{opacity:.7;cursor:default}
                 .ak-card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1rem 1.25rem;margin-bottom:.75rem}
                 .ak-card:hover{box-shadow:0 2px 8px var(--card-hover)}
                 .ak-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
@@ -267,6 +283,7 @@ return [
                                 html+='</div>';
                             }
                             html+='<div class="ak-actions">';
+                            html+='<button onclick="akView('+k.id+')" class="btn-sm" style="background:var(--subtle)">View</button>';
                             html+='<button onclick="akEdit('+k.id+')" class="btn-sm">Edit</button>';
                             html+='<button onclick="akDel('+k.id+')" class="btn-sm btn-sm-danger">Delete</button>';
                             html+='</div></div>';
@@ -283,9 +300,12 @@ return [
                         });
                     };
 
-                    window.akShowForm=function(data){
+                    function akOpenModal(data, readOnly){
                         data=data||{};
+                        var ro=!!readOnly;
                         document.getElementById('akEditId').value=data.id||0;
+                        document.getElementById('akReadOnly').value=ro?'1':'0';
+                        document.getElementById('akModalTitle').textContent=ro?'View API Key':(data.id?'Edit API Key':'Add API Key');
                         document.getElementById('akName').value=data.name||'';
                         document.getElementById('akProvider').value=data.provider||'';
                         document.getElementById('akKeyValue').value=data._decrypted||'';
@@ -296,20 +316,25 @@ return [
                         document.getElementById('akCostUrl').value=data.cost_url||'';
                         document.getElementById('akBudget').value=data.monthly_budget||'';
                         document.getElementById('akNotes').value=data.notes||'';
-                        // Set selected servers
                         var srvs=data.servers||[];
                         if(typeof srvs==='string')try{srvs=JSON.parse(srvs)}catch(e){srvs=[]}
                         var sel=document.getElementById('akServers');
                         for(var o of sel.options)o.selected=srvs.indexOf(parseInt(o.value))>=0;
-                        // Set paths
                         var paths=data.paths||[];
                         if(typeof paths==='string')try{paths=JSON.parse(paths)}catch(e){paths=[]}
                         document.getElementById('akPaths').value=paths.join('\n');
-                        document.getElementById('akForm').style.display='';
-                        window.scrollTo({top:document.getElementById('akForm').offsetTop-80,behavior:'smooth'});
-                    };
+                        // Set read-only state
+                        var inputs=document.querySelectorAll('.ak-modal-body input,.ak-modal-body textarea,.ak-modal-body select');
+                        inputs.forEach(function(el){if(el.tagName==='SELECT'){el.disabled=ro}else{el.readOnly=ro}});
+                        document.getElementById('akModalFooter').style.display=ro?'none':'';
+                        document.getElementById('akModal').style.display='flex';
+                        document.body.style.overflow='hidden';
+                    }
 
-                    window.akCancelForm=function(){document.getElementById('akForm').style.display='none'};
+                    window.akShowForm=function(data){akOpenModal(data,false)};
+                    window.akView=function(id){var k=allKeys.find(function(x){return x.id==id});if(k)akOpenModal(k,true)};
+                    window.akCloseModal=function(){document.getElementById('akModal').style.display='none';document.body.style.overflow=''};
+                    document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.getElementById('akModal').style.display==='flex')akCloseModal()});
                     window.akToggleKey=function(){var el=document.getElementById('akKeyValue');el.type=el.type==='password'?'text':'password'};
 
                     window.akEdit=function(id){
