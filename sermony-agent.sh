@@ -115,12 +115,13 @@ net_ifaces_json="["
 first_nic=1
 while read -r ifname ifstate; do
     [[ "$ifname" == "lo" ]] && continue
-    ifip=$(ip -4 addr show "$ifname" 2>/dev/null | awk '/inet / {print $2}' | head -1)
+    ifip4=$(ip -4 addr show "$ifname" 2>/dev/null | awk '/inet / {print $2}' | head -1)
+    ifip6=$(ip -6 addr show "$ifname" scope global 2>/dev/null | awk '/inet6/ {print $2}' | head -1)
     ifmac=$(ip link show "$ifname" 2>/dev/null | awk '/link\/ether/ {print $2}')
     ifspeed=$(ethtool "$ifname" 2>/dev/null | awk '/Speed:/ {print $2}')
     [[ "$ifspeed" == "Unknown!" ]] && ifspeed=""
     [[ $first_nic -eq 0 ]] && net_ifaces_json+=","
-    net_ifaces_json+="{\"name\":\"${ifname}\",\"state\":\"${ifstate}\",\"ip\":\"${ifip}\",\"mac\":\"${ifmac}\",\"speed\":\"${ifspeed}\"}"
+    net_ifaces_json+="{\"name\":\"${ifname}\",\"state\":\"${ifstate}\",\"ip4\":\"${ifip4}\",\"ip6\":\"${ifip6}\",\"mac\":\"${ifmac}\",\"speed\":\"${ifspeed}\"}"
     first_nic=0
 done < <(ip -br link 2>/dev/null | awk '{print $1, $2}')
 net_ifaces_json+="]"

@@ -1063,13 +1063,14 @@ function showServer(): never {
             <?php if (!empty($nics) && is_array($nics)): ?>
             <div class="nic-table">
                 <table>
-                    <thead><tr><th>Interface</th><th>State</th><th>IP</th><th>MAC</th><th>Speed</th></tr></thead>
+                    <thead><tr><th>Interface</th><th>State</th><th>IPv4</th><th>IPv6</th><th>MAC</th><th>Speed</th></tr></thead>
                     <tbody>
                     <?php foreach ($nics as $nic): ?>
                     <tr>
                         <td data-label="Interface"><strong><?=e((string)($nic['name'] ?? ''))?></strong></td>
                         <td data-label="State"><span class="nic-state nic-<?=strtolower($nic['state'] ?? 'unknown')?>"><?=e((string)($nic['state'] ?? ''))?></span></td>
-                        <td data-label="IP"><?=e((string)($nic['ip'] ?? "\xE2\x80\x94"))?></td>
+                        <td data-label="IPv4"><?=e((string)($nic['ip4'] ?? $nic['ip'] ?? "\xE2\x80\x94"))?></td>
+                        <td data-label="IPv6"><?php $v6 = (string)($nic['ip6'] ?? ''); echo $v6 ? e($v6) : "\xE2\x80\x94"; ?></td>
                         <td data-label="MAC"><code><?=e((string)($nic['mac'] ?? "\xE2\x80\x94"))?></code></td>
                         <td data-label="Speed"><?=e((string)($nic['speed'] ?? "\xE2\x80\x94"))?></td>
                     </tr>
