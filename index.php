@@ -902,7 +902,7 @@ function showDashboard(): never {
             foreach ($si['services'] ?? [] as $svc) $searchParts[] = $svc['name'] ?? '';
             if (!empty($si['docker'])) $searchParts[] = 'docker';
             foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
-            foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $searchParts[] = $nic['name'] ?? ''; }
+            foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) { $searchParts[] = $nic['name'] ?? ''; $searchParts[] = $nic['ip4'] ?? $nic['ip'] ?? ''; $searchParts[] = $nic['ip6'] ?? ''; } }
             $searchParts = doHookFilter('search_data', $searchParts, $srv);
             $searchStr = e(strtolower(implode(' ', array_filter($searchParts))));
         ?>
@@ -970,7 +970,7 @@ function showDashboard(): never {
                 foreach ($si['services'] ?? [] as $svc) $dgSearch[] = $svc['name'] ?? '';
                 if (!empty($si['docker'])) $dgSearch[] = 'docker';
                 foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
-                foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) $dgSearch[] = $nic['name'] ?? ''; }
+                foreach ($si['net_interfaces'] ?? [] as $nic) { if (is_array($nic)) { $dgSearch[] = $nic['name'] ?? ''; $dgSearch[] = $nic['ip4'] ?? $nic['ip'] ?? ''; $dgSearch[] = $nic['ip6'] ?? ''; } }
                 $dgSearch = doHookFilter('search_data', $dgSearch, $srv);
             ?>
             <tr data-status="<?=!$on ? 'offline' : ($stale ? 'stale' : ($health==='crit' ? 'crit' : ($health==='warn' ? 'warn' : 'online')))?>" data-search="<?=e(strtolower(implode(' ', array_filter($dgSearch))))?>" data-cpu="<?=(float)($cpu ?? -1)?>" data-mem="<?=(float)($mem ?? -1)?>" data-disk="<?=(float)($disk ?? -1)?>" data-load="<?=(float)($srv['load_1'] ?? -1)?>" data-iops="<?=(float)($srv['disk_iops'] ?? -1)?>" data-name="<?=e($srv['display_name'] ?: $srv['hostname'])?>" data-cores="<?=$cores?>" data-ramgb="<?=$ramGb?>" data-disktotal="<?=$diskTotalNum?>">
