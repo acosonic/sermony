@@ -365,7 +365,7 @@ return [
                         };
                         var resp=await fetch('?action=api-keys-save',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify(payload)});
                         var r=await resp.json();
-                        if(r.ok){akCancelForm();akLoadList()}else{alert('Save failed: '+(r.error||'unknown'))}
+                        if(r.ok){akCloseModal();akLoadList()}else{alert('Save failed: '+(r.error||'unknown'))}
                     };
 
                     window.akDel=async function(id){
