@@ -29,11 +29,13 @@ for pm2dir in /home/*/.pm2 /root/.pm2; do
     nodedir=$(dirname "$pm2bin")
 
     # Try jlist first (works when CLI and daemon versions match)
-    jlist=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" jlist 2>/dev/null || echo "[]")
+    raw_jlist=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" jlist 2>/dev/null || echo "[]")
+    # Strip any warning text before the JSON array — find first [
+    jlist=$(echo "$raw_jlist" | sed -n '/^\[/,$p')
+    [[ -z "$jlist" ]] && jlist="[]"
 
-    # If jlist is empty or just [], fall back to parsing pm2 list table output
-    if [[ "$jlist" == "[]" || "$jlist" == "" || "$jlist" == "[]
-" ]]; then
+    # If jlist is empty, fall back to parsing pm2 list table output
+    if [[ "$jlist" == "[]" ]]; then
         # Parse the table output from pm2 list
         listout=$(sudo -u "$pm2user" env HOME="$pm2home" PM2_HOME="$pm2dir" PATH="${nodedir}:/usr/local/bin:/usr/bin:/bin" "$pm2bin" list --no-color 2>/dev/null || echo "")
 
