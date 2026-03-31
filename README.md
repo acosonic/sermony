@@ -75,12 +75,12 @@ That's it. Servers appear on the dashboard automatically.
 - Three view modes: card grid, compact list, sortable datagrid
 - Datagrid with sortable columns: name, CPU cores, CPU%, RAM, Mem%, disk total, Disk%, IOPS, load
 - Fullscreen mode for wide monitors
-- Search/filter servers by name, IP, or FQDN
+- Search/filter servers by name, IP, FQDN, services, Docker images, PM2 processes, OS, CPU model
 - Clickable status pills to filter by: online, offline, critical, warning, stale
 - Dark/light theme (follows OS preference, manual toggle)
 - Sparkline charts on server detail page (CPU/memory/disk trends)
 - System info: CPU model/cores, RAM, disk, OS, kernel, uptime, network interfaces, DNS, Docker, services
-- Per-interface details: name, state (UP/DOWN), IP, MAC, link speed
+- Per-interface details: name, state (UP/DOWN), IPv4, IPv6, MAC, link speed
 - Docker container listing with image, status, and ports
 - Active service detection (mysql, postgresql, nginx, postfix, redis, etc.)
 - Auto-refresh dashboard without full page reload
@@ -131,6 +131,17 @@ Sermony supports a simple plugin system. Each plugin is a folder inside `plugins
 | `after_ingest` | After metrics are saved | `$serverId`, `$metrics`, `$server` |
 | `settings_panel` | Settings page, before Security | — |
 | `header_links` | Header navigation area | — |
+| `custom_action` | Handle custom URL actions | `$action` |
+| `search_data` | Add terms to search index (filter) | `$parts`, `$server` |
+
+### Included Plugins
+
+| Plugin | Description |
+|--------|-------------|
+| [Credential Vault](plugins/vault/) | Encrypted server credential storage (AES-256-GCM, client-side crypto) |
+| [API Key Manager](plugins/api-keys/) | Track API keys across servers — where used, spending, expiry |
+| [PM2 Monitor](plugins/pm2/) | Monitor PM2 processes across servers with own agent script |
+| [Example](plugins/example/) | Reference template with all hooks documented |
 
 ### Creating a Plugin
 
