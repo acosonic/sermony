@@ -20,6 +20,7 @@ const DEFAULTS = [
     'enrollment_key'       => '',
     'interval_minutes'     => '15',
     'retention_days'       => '30',
+    'detail_hours'         => '48',
     'api_ip_allowlist'     => '',  // comma-separated, empty = allow all
     'default_ssh_user'     => 'ubuntu',
     'alert_cpu_warn'       => '75',
@@ -249,6 +250,47 @@ function sparkSvg(array $values, string $type, ?array $srv = null): string {
         $bars .= "<rect x=\"$x\" y=\"$y\" width=\"" . round($bw, 1) . "\" height=\"$bh\" fill=\"$col\" rx=\"1\"/>";
     }
     return "<svg class=\"spark\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\">$bars</svg>";
+}
+
+/** Render an SVG line chart for the detail page */
+function lineChart(array $metrics, string $col, string $type, string $label, ?array $srv = null): string {
+    $n = count($metrics); if ($n < 2) return '';
+    $w = 100; $h = 40; $pad = 0;
+    $vals = array_map(fn($m) => $m[$col] !== null ? min((float)$m[$col], 100) : null, $metrics);
+    // Build polyline points
+    $points = []; $areaPoints = [];
+    $validCount = 0;
+    foreach ($vals as $i => $v) {
+        if ($v === null) continue;
+        $x = round($pad + ($i / max($n - 1, 1)) * ($w - 2 * $pad), 2);
+        $y = round($h - ($v / 100) * $h, 2);
+        $points[] = "$x,$y";
+        $areaPoints[] = "$x,$y";
+        $validCount++;
+    }
+    if ($validCount < 2) return '';
+    $firstX = explode(',', $areaPoints[0])[0];
+    $lastX = explode(',', $areaPoints[count($areaPoints) - 1])[0];
+    // Latest value for color
+    $last = null;
+    for ($i = count($vals) - 1; $i >= 0; $i--) { if ($vals[$i] !== null) { $last = $vals[$i]; break; } }
+    $col_css = $last >= threshold($type, 'crit', $srv) ? 'var(--red)' :
+              ($last >= threshold($type, 'warn', $srv) ? 'var(--amber)' : 'var(--green)');
+    $line = implode(' ', $points);
+    $area = implode(' ', $areaPoints) . " $lastX,$h $firstX,$h";
+    $svg = "<div class=\"chart-box\"><span class=\"chart-label\">$label <strong style=\"color:$col_css\">" . ($last !== null ? number_format($last, 1) . '%' : '') . "</strong></span>";
+    $svg .= "<svg class=\"chart\" viewBox=\"0 0 $w $h\" preserveAspectRatio=\"none\">";
+    // Threshold lines
+    $warnY = round($h - (threshold($type, 'warn', $srv) / 100) * $h, 1);
+    $critY = round($h - (threshold($type, 'crit', $srv) / 100) * $h, 1);
+    $svg .= "<line x1=\"0\" y1=\"$warnY\" x2=\"$w\" y2=\"$warnY\" stroke=\"var(--amber)\" stroke-width=\"0.3\" stroke-dasharray=\"2,2\" opacity=\".5\"/>";
+    $svg .= "<line x1=\"0\" y1=\"$critY\" x2=\"$w\" y2=\"$critY\" stroke=\"var(--red)\" stroke-width=\"0.3\" stroke-dasharray=\"2,2\" opacity=\".5\"/>";
+    // Area fill
+    $svg .= "<polygon points=\"$area\" fill=\"$col_css\" opacity=\".1\"/>";
+    // Line
+    $svg .= "<polyline points=\"$line\" fill=\"none\" stroke=\"$col_css\" stroke-width=\"0.8\" stroke-linejoin=\"round\"/>";
+    $svg .= "</svg></div>";
+    return $svg;
 }
 
 // ─── Plugins ─────────────────────────────────────────────────
@@ -641,7 +683,7 @@ function handleDelete(): never {
 
 function handleSettings(): never {
     verifyCsrf();
-    $intFields = ['interval_minutes','retention_days','alert_cpu_warn','alert_cpu_crit','alert_mem_warn','alert_mem_crit','alert_disk_warn','alert_disk_crit','alert_mail_warn','alert_mail_crit','alert_cooldown_minutes'];
+    $intFields = ['interval_minutes','retention_days','detail_hours','alert_cpu_warn','alert_cpu_crit','alert_mem_warn','alert_mem_crit','alert_disk_warn','alert_disk_crit','alert_mail_warn','alert_mail_crit','alert_cooldown_minutes'];
     foreach ($intFields as $k) { if (isset($_POST[$k])) setSetting($k, (string)max(1, (int)$_POST[$k])); }
     // String settings
     foreach (['alert_email', 'alert_webhook_url', 'api_ip_allowlist', 'default_ssh_user'] as $k) { if (isset($_POST[$k])) setSetting($k, trim((string)$_POST[$k])); }
@@ -1012,8 +1054,10 @@ function showServer(): never {
 
     $si = $srv['interval_minutes'] !== null ? (int)$srv['interval_minutes'] : null;
     $on = isOnline($srv['last_seen_at'], $si);
-    $s = $d->prepare('SELECT * FROM metrics WHERE server_id=:id ORDER BY received_at DESC LIMIT :lim');
-    $s->bindValue(':id', $id, SQLITE3_INTEGER); $s->bindValue(':lim', HISTORY, SQLITE3_INTEGER);
+    $detailHours = (int)(setting('detail_hours') ?? 48);
+    $s = $d->prepare("SELECT * FROM metrics WHERE server_id=:id AND received_at > strftime('%Y-%m-%dT%H:%M:%SZ','now',:hours) ORDER BY received_at DESC");
+    $s->bindValue(':id', $id, SQLITE3_INTEGER);
+    $s->bindValue(':hours', '-' . $detailHours . ' hours', SQLITE3_TEXT);
     $res = $s->execute(); $metrics = [];
     while ($row = $res->fetchArray(SQLITE3_ASSOC)) $metrics[] = $row;
 
@@ -1157,23 +1201,12 @@ function showServer(): never {
     <?php if (empty($metrics)): ?>
     <p class="empty">No metrics recorded yet.</p>
     <?php else: ?>
-    <?php
-        // Sparkline charts from metrics history (last 30 points for more detail)
-        $sparkSlice = array_reverse(array_slice($metrics, 0, 30));
-    ?>
-    <div class="detail-sparks">
-        <div class="detail-spark">
-            <span class="spark-label">CPU %</span>
-            <?=sparkSvg(array_column($sparkSlice, 'cpu_usage'), 'cpu', $srv)?>
-        </div>
-        <div class="detail-spark">
-            <span class="spark-label">Memory %</span>
-            <?=sparkSvg(array_column($sparkSlice, 'memory_usage'), 'mem', $srv)?>
-        </div>
-        <div class="detail-spark">
-            <span class="spark-label">Disk %</span>
-            <?=sparkSvg(array_column($sparkSlice, 'disk_usage'), 'disk', $srv)?>
-        </div>
+    <p style="font-size:.75rem;color:var(--subtle);margin:1rem 0 0"><?=count($metrics)?> data points, last <?=$detailHours?>h</p>
+    <?php $chartData = array_reverse($metrics); ?>
+    <div class="chart-grid">
+        <?=lineChart($chartData, 'cpu_usage', 'cpu', 'CPU', $srv)?>
+        <?=lineChart($chartData, 'memory_usage', 'mem', 'Memory', $srv)?>
+        <?=lineChart($chartData, 'disk_usage', 'disk', 'Disk', $srv)?>
     </div>
     <div class="table-wrap">
         <table>
@@ -1257,6 +1290,9 @@ function showSettings(): never {
                 <div class="field-row">
                     <label>Check Interval (minutes)<input type="number" name="interval_minutes" value="<?=e(setting('interval_minutes'))?>" min="1" max="1440"></label>
                     <label>Data Retention (days)<input type="number" name="retention_days" value="<?=e(setting('retention_days'))?>" min="1" max="3650"></label>
+                </div>
+                <div class="field-row" style="margin-top:.5rem">
+                    <label>Detail Page History (hours)<input type="number" name="detail_hours" value="<?=e(setting('detail_hours'))?>" min="1" max="8760" placeholder="48"></label>
                 </div>
                 <label>Default SSH User (for IP copy button)
                     <input type="text" name="default_ssh_user" value="<?=e(setting('default_ssh_user'))?>" placeholder="ubuntu">
@@ -1423,9 +1459,10 @@ header h1{font-size:1.25rem;font-weight:600;flex:1} header h1 span{color:#60a5fa
 
 .spark-label{font-size:.65rem;color:var(--subtle);text-transform:uppercase;letter-spacing:.03em;display:block;margin-bottom:2px}
 .spark{width:100%;height:20px;display:block}
-.detail-sparks{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:1rem;margin:1.25rem 0;padding:1rem 1.25rem;background:var(--card);border:1px solid var(--card-border);border-radius:8px}
-.detail-spark .spark{height:48px}
-.detail-spark .spark-label{font-size:.75rem;font-weight:600;margin-bottom:4px}
+.chart-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;margin:1.25rem 0}
+.chart-box{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:.75rem 1rem}
+.chart-label{font-size:.78rem;font-weight:600;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:.4rem}
+.chart{width:100%;height:80px;display:block}
 
 .detail-header{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:1.25rem;margin:1.25rem 0;overflow:hidden}
 .detail-title{display:flex;align-items:center;gap:.5rem;margin:.75rem 0}
