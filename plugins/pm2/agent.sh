@@ -52,7 +52,7 @@ for pm2dir in /home/*/.pm2 /root/.pm2; do
                 [[ -z "$pname" || "$pname" == "name" ]] && continue
 
                 # Sanitize
-                pname=$(echo "$pname" | tr -cd '[:alnum:]._- ')
+                pname=$(echo "$pname" | tr -cd '[:alnum:]. _-')
 
                 [[ $first -eq 0 ]] && pm2_json+=","
                 pm2_json+="{\"name\":\"${pname}\",\"user\":\"${pm2user}\",\"status\":\"${pstatus}\",\"cpu\":\"${pcpu}\",\"mem\":\"${pmem}\",\"restarts\":\"${prestart}\",\"uptime\":\"${puptime}\",\"script\":\"\"}"
@@ -65,8 +65,8 @@ for pm2dir in /home/*/.pm2 /root/.pm2; do
     # Parse jlist JSON output
     while IFS='|' read -r pname pstatus pcpu pmem prestart puptime pscript; do
         [[ -z "$pname" ]] && continue
-        pname=$(echo "$pname" | tr -cd '[:alnum:]._- ')
-        pscript=$(echo "$pscript" | tr -cd '[:alnum:]._/:-')
+        pname=$(echo "$pname" | tr -cd '[:alnum:]. _-')
+        pscript=$(echo "$pscript" | tr -cd '[:alnum:]._/: -')
         [[ $first -eq 0 ]] && pm2_json+=","
         pm2_json+="{\"name\":\"${pname}\",\"user\":\"${pm2user}\",\"status\":\"${pstatus}\",\"cpu\":\"${pcpu}\",\"mem\":\"${pmem}\",\"restarts\":\"${prestart}\",\"uptime\":\"${puptime}\",\"script\":\"${pscript}\"}"
         first=0
