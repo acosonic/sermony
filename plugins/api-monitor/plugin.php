@@ -379,13 +379,13 @@ return [
                 </div>
 
                 <!-- Modal -->
-                <div id="amModal" class="ak-modal-overlay" style="display:none" onclick="if(event.target===this)amCloseModal()">
-                    <div class="ak-modal" style="max-width:700px">
-                        <div class="ak-modal-header">
+                <div id="amModal" class="am-modal-overlay" style="display:none" onclick="if(event.target===this)amCloseModal()">
+                    <div class="am-modal" style="max-width:700px">
+                        <div class="am-modal-header">
                             <strong id="amModalTitle">Add Monitor</strong>
                             <button onclick="amCloseModal()" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--muted)">&times;</button>
                         </div>
-                        <div class="ak-modal-body">
+                        <div class="am-modal-body">
                             <input type="hidden" id="amId" value="0">
                             <div class="field-row">
                                 <label>Name <input type="text" id="amName" placeholder="Production API Health"></label>
@@ -437,7 +437,7 @@ return [
                             </div>
                             <label style="margin-top:.5rem"><input type="checkbox" id="amEnabled" checked> Enabled</label>
                         </div>
-                        <div class="ak-modal-footer">
+                        <div class="am-modal-footer">
                             <button onclick="amSave()" class="btn-primary" style="padding:.4rem 1rem;font-size:.85rem">Save</button>
                             <button onclick="amCloseModal()" class="btn-secondary" style="padding:.4rem 1rem;font-size:.85rem">Cancel</button>
                         </div>
@@ -445,17 +445,22 @@ return [
                 </div>
 
                 <!-- History Modal -->
-                <div id="amHistModal" class="ak-modal-overlay" style="display:none" onclick="if(event.target===this)amCloseHist()">
-                    <div class="ak-modal" style="max-width:800px">
-                        <div class="ak-modal-header">
+                <div id="amHistModal" class="am-modal-overlay" style="display:none" onclick="if(event.target===this)amCloseHist()">
+                    <div class="am-modal" style="max-width:800px">
+                        <div class="am-modal-header">
                             <strong id="amHistTitle">History</strong>
                             <button onclick="amCloseHist()" style="background:none;border:none;font-size:1.3rem;cursor:pointer;color:var(--muted)">&times;</button>
                         </div>
-                        <div class="ak-modal-body" id="amHistBody" style="max-height:70vh;overflow-y:auto">Loading...</div>
+                        <div class="am-modal-body" id="amHistBody" style="max-height:70vh;overflow-y:auto">Loading...</div>
                     </div>
                 </div>
 
                 <style>
+                .am-modal-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem}
+                .am-modal{background:var(--card);border:1px solid var(--card-border);border-radius:12px;width:100%;max-width:700px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+                .am-modal-header{display:flex;align-items:center;justify-content:space-between;padding:.75rem 1.25rem;border-bottom:1px solid var(--card-border)}
+                .am-modal-body{padding:1rem 1.25rem;overflow-y:auto;flex:1}
+                .am-modal-footer{display:flex;gap:.5rem;padding:.75rem 1.25rem;border-top:1px solid var(--card-border)}
                 .am-card{background:var(--card);border:1px solid var(--card-border);border-radius:8px;padding:.75rem 1rem;margin-bottom:.5rem;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
                 .am-card:hover{box-shadow:0 2px 8px var(--card-hover)}
                 .am-card.am-fail{border-left:3px solid var(--red)}
