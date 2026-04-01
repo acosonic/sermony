@@ -657,6 +657,7 @@ return [
 
                     document.addEventListener('keydown',function(e){if(e.key==='Escape'){amCloseModal();amCloseHist()}});
                     amLoad();
+                    setInterval(amLoad,30000);
                 })();
                 </script>
                 <?php
