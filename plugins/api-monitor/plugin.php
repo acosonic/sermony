@@ -210,14 +210,28 @@ return [
         'dashboard_top' => function () {
             apiMonDb();
             $d = db();
-            $res = $d->query("SELECT COUNT(*) as total, SUM(CASE WHEN last_status='ok' THEN 1 ELSE 0 END) as ok_count, SUM(CASE WHEN last_status='fail' THEN 1 ELSE 0 END) as fail_count FROM api_monitors WHERE enabled=1");
-            $r = $res->fetchArray(SQLITE3_ASSOC);
-            if ((int)($r['total'] ?? 0) === 0) return;
-            $total = (int)$r['total']; $ok = (int)$r['ok_count']; $fail = (int)$r['fail_count'];
-            $pending = $total - $ok - $fail;
-            if ($fail > 0) {
-                echo '<div style="background:color-mix(in srgb,var(--red) 10%,var(--card));border:1px solid var(--red);border-radius:8px;padding:.5rem .75rem;margin-bottom:.5rem;font-size:.82rem;display:flex;align-items:center;gap:.5rem">';
-                echo '<span class="badge badge-crit">' . $fail . ' FAILING</span> ';
+            $now = gmdate('Y-m-d\TH:i:s\Z');
+            $res = $d->query("SELECT * FROM api_monitors WHERE enabled=1");
+            $total = 0; $ok = 0; $fail = 0; $overdue = 0; $late = 0;
+            while ($m = $res->fetchArray(SQLITE3_ASSOC)) {
+                $total++;
+                if ($m['last_status'] === 'fail') { $fail++; continue; }
+                if ($m['next_run_at'] && $m['next_run_at'] < $now) {
+                    $overdueThreshold = (int)$m['interval_minutes'] * 120; // 2x interval in seconds
+                    $elapsed = time() - strtotime($m['next_run_at']);
+                    if ($elapsed > $overdueThreshold) { $overdue++; continue; }
+                    $late++;
+                }
+                if ($m['last_status'] === 'ok') $ok++;
+            }
+            if ($total === 0) return;
+            $issues = $fail + $overdue;
+            if ($issues > 0) {
+                $color = $fail > 0 ? 'var(--red)' : 'var(--amber)';
+                echo '<div style="background:color-mix(in srgb,' . $color . ' 10%,var(--card));border:1px solid ' . $color . ';border-radius:8px;padding:.5rem .75rem;margin-bottom:.5rem;font-size:.82rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">';
+                if ($fail) echo '<span class="badge badge-crit">' . $fail . ' FAILING</span>';
+                if ($overdue) echo '<span class="badge" style="background:var(--red);color:#fff">' . $overdue . ' OFFLINE</span>';
+                if ($late) echo '<span class="badge badge-warn">' . $late . ' LATE</span>';
                 echo '<a href="?action=api-monitors" style="font-size:.8rem">API Monitors: ' . $ok . '/' . $total . ' passing</a>';
                 echo '</div>';
             }
@@ -240,7 +254,7 @@ return [
                     $r['api_key_value'] = $r['api_key_value'] ? apiMonMask($r['api_key_value']) : '';
                     $monitors[] = $r;
                 }
-                jsonOut(['monitors' => $monitors]);
+                jsonOut(['monitors' => $monitors, 'server_time' => gmdate('Y-m-d\TH:i:s\Z')]);
             }
 
             if ($action === 'api-monitors-save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -466,6 +480,8 @@ return [
                 .am-card.am-fail{border-left:3px solid var(--red)}
                 .am-card.am-ok{border-left:3px solid var(--green)}
                 .am-card.am-pending{border-left:3px solid var(--subtle)}
+                .am-card.am-overdue{border-left:3px solid var(--red);background:color-mix(in srgb,var(--red) 5%,var(--card))}
+                .am-card.am-late{border-left:3px solid var(--amber);background:color-mix(in srgb,var(--amber) 5%,var(--card))}
                 .am-card.am-disabled{opacity:.5}
                 .am-name{font-weight:600;font-size:.9rem;min-width:150px}
                 .am-url{font-size:.75rem;color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -477,29 +493,49 @@ return [
                 <script>
                 (function(){
                     var allMonitors=[];
+                    var serverTime=null;
 
                     async function amLoad(){
                         var resp=await fetch('?action=api-monitors-list');
                         var data=await resp.json();
                         allMonitors=data.monitors||[];
+                        serverTime=new Date(data.server_time||new Date().toISOString());
                         amRender(allMonitors);
+                    }
+
+                    function amIsOverdue(m){
+                        if(!m.enabled||!m.next_run_at)return false;
+                        var next=new Date(m.next_run_at);
+                        var overdueMs=m.interval_minutes*60*1000*2; // 2x interval = overdue
+                        return serverTime-next>overdueMs;
+                    }
+                    function amIsLate(m){
+                        if(!m.enabled||!m.next_run_at)return false;
+                        var next=new Date(m.next_run_at);
+                        return serverTime>next;
                     }
 
                     function amRender(list){
                         if(!list.length){document.getElementById('amList').innerHTML='<p class="empty">No monitors configured yet.</p>';return}
                         var html='';
                         for(var m of list){
+                            var overdue=amIsOverdue(m);
+                            var late=amIsLate(m);
                             var cls='am-card';
                             if(!m.enabled)cls+=' am-disabled';
-                            else if(m.last_status==='ok')cls+=' am-ok';
                             else if(m.last_status==='fail')cls+=' am-fail';
+                            else if(overdue)cls+=' am-overdue';
+                            else if(m.last_status==='ok'&&!late)cls+=' am-ok';
+                            else if(m.last_status==='ok'&&late)cls+=' am-late';
                             else cls+=' am-pending';
 
                             var badge='';
-                            if(m.last_status==='ok')badge='<span class="badge" style="background:var(--green);color:#fff">OK</span>';
-                            else if(m.last_status==='fail')badge='<span class="badge badge-crit">FAIL'+(m.fail_streak>1?' x'+m.fail_streak:'')+'</span>';
-                            else badge='<span class="badge" style="background:var(--subtle);color:#fff">PENDING</span>';
                             if(!m.enabled)badge='<span class="badge" style="background:var(--subtle);color:#fff">DISABLED</span>';
+                            else if(m.last_status==='fail')badge='<span class="badge badge-crit">FAIL'+(m.fail_streak>1?' x'+m.fail_streak:'')+'</span>';
+                            else if(overdue)badge='<span class="badge" style="background:var(--red);color:#fff">OFFLINE</span>';
+                            else if(m.last_status==='ok'&&late)badge='<span class="badge badge-warn">LATE</span>';
+                            else if(m.last_status==='ok')badge='<span class="badge" style="background:var(--green);color:#fff">OK</span>';
+                            else badge='<span class="badge" style="background:var(--subtle);color:#fff">PENDING</span>';
 
                             html+='<div class="'+cls+'" data-search="'+esc(m.name+' '+m.url+' '+m.method).toLowerCase()+'">';
                             html+=badge;
