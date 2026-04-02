@@ -34,28 +34,35 @@ function Read-Config {
 
 # ── Identifiers ────────────────────────────────────────────────────────────────
 function Get-PublicIPv4 {
-    $sources = @('https://ifconfig.me','https://api.ipify.org','https://ipv4.icanhazip.com')
+    # Use plain-text endpoints only; validate strict IPv4 pattern
+    $sources = @('https://api.ipify.org','https://ipv4.icanhazip.com','https://ifconfig.me/ip')
     foreach ($url in $sources) {
         try {
             $ip = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5).Content.Trim()
-            if ($ip -match '^\d+\.\d+\.\d+\.\d+$') { return $ip }
+            if ($ip -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $ip }
         } catch { }
     }
     return ''
 }
 
 function Get-PublicIPv6 {
-    try {
-        $ip = (Invoke-WebRequest -Uri 'https://ifconfig.me' -UseBasicParsing -TimeoutSec 5).Content.Trim()
-        if ($ip -match ':') { return $ip }
-    } catch { }
+    # Use plain-text endpoints only; validate strict IPv6 pattern (contains : but no spaces/tags)
+    $ipv6Pattern = '^[0-9a-fA-F:]{2,39}$'
+    $sources = @('https://api6.ipify.org','https://ipv6.icanhazip.com')
+    foreach ($url in $sources) {
+        try {
+            $ip = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5).Content.Trim()
+            if ($ip -match $ipv6Pattern) { return $ip }
+        } catch { }
+    }
     # Fall back to first global unicast IPv6 from local adapters
     try {
         $addr = Get-NetIPAddress -AddressFamily IPv6 -PrefixOrigin RouterAdvertisement -ErrorAction SilentlyContinue |
                 Where-Object { $_.IPAddress -notmatch '^fe80' } |
                 Select-Object -First 1 -ExpandProperty IPAddress
-        return if ($addr) { $addr } else { '' }
-    } catch { return '' }
+        if ($addr) { return $addr }
+    } catch { }
+    return ''
 }
 
 function Get-FQDN {
