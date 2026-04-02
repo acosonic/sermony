@@ -35,7 +35,7 @@ function Read-Config {
 # ── Identifiers ────────────────────────────────────────────────────────────────
 function Get-PublicIPv4 {
     # Use plain-text endpoints only; validate strict IPv4 pattern
-    $sources = @('https://api.ipify.org','https://ipv4.icanhazip.com','https://ifconfig.me/ip')
+    $sources = @('https://acosonic.com/ip.php','https://api.ipify.org','https://ipv4.icanhazip.com')
     foreach ($url in $sources) {
         try {
             $ip = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5).Content.Trim()
