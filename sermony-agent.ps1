@@ -3,225 +3,330 @@
 .SYNOPSIS
     Sermony Windows Agent - collects system metrics and reports to a Sermony server.
 .DESCRIPTION
-    Reads metrics from Windows (CPU, memory, disk, network) and POSTs them
-    to the configured Sermony server endpoint. Config is stored in
-    $env:ProgramData\sermony\config (created by install.ps1).
+    Payload matches the Linux sermony-agent.sh format exactly so all dashboard
+    fields (public IP, IPv6, FQDN, NIC details, Docker, services, etc.) populate.
+
+    Config is stored in $env:ProgramData\sermony\config (written by install.ps1).
+
+.PARAMETER ConfigFile
+    Override the default config file path (useful for testing).
 #>
+[CmdletBinding()]
+param(
+    [string]$ConfigFile = "$env:ProgramData\sermony\config"
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# ── Config ────────────────────────────────────────────────────────────────────
-$ConfigDir  = "$env:ProgramData\sermony"
-$ConfigFile = "$ConfigDir\config"
-
 function Read-Config {
-    if (-not (Test-Path $ConfigFile)) {
-        Write-Error "Config file not found: $ConfigFile. Run install.ps1 first."
+    param([string]$Path)
+    if (-not (Test-Path $Path)) {
+        Write-Error "Config not found: $Path. Run install.ps1 first."
         exit 1
     }
     $cfg = @{}
-    Get-Content $ConfigFile | ForEach-Object {
-        if ($_ -match '^\s*([^#=]+?)\s*=\s*(.+)$') {
-            $cfg[$Matches[1]] = $Matches[2]
-        }
+    Get-Content $Path | ForEach-Object {
+        if ($_ -match '^\s*([^#=]+?)\s*=\s*(.+)$') { $cfg[$Matches[1]] = $Matches[2] }
     }
     return $cfg
 }
 
-# ── Metric helpers ────────────────────────────────────────────────────────────
+# ── Identifiers ────────────────────────────────────────────────────────────────
+function Get-PublicIPv4 {
+    $sources = @('https://ifconfig.me','https://api.ipify.org','https://ipv4.icanhazip.com')
+    foreach ($url in $sources) {
+        try {
+            $ip = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 5).Content.Trim()
+            if ($ip -match '^\d+\.\d+\.\d+\.\d+$') { return $ip }
+        } catch { }
+    }
+    return ''
+}
+
+function Get-PublicIPv6 {
+    try {
+        $ip = (Invoke-WebRequest -Uri 'https://ifconfig.me' -UseBasicParsing -TimeoutSec 5).Content.Trim()
+        if ($ip -match ':') { return $ip }
+    } catch { }
+    # Fall back to first global unicast IPv6 from local adapters
+    try {
+        $addr = Get-NetIPAddress -AddressFamily IPv6 -PrefixOrigin RouterAdvertisement -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -notmatch '^fe80' } |
+                Select-Object -First 1 -ExpandProperty IPAddress
+        return if ($addr) { $addr } else { '' }
+    } catch { return '' }
+}
+
+function Get-FQDN {
+    try { return [System.Net.Dns]::GetHostEntry('').HostName } catch { return $env:COMPUTERNAME }
+}
+
+# ── CPU (1-second sample like the Linux agent) ─────────────────────────────────
 function Get-CpuUsage {
-    $load = Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property LoadPercentage -Average
-    return [math]::Round($load.Average, 1)
+    $s1 = (Get-CimInstance -ClassName Win32_Processor).LoadPercentage
+    Start-Sleep -Seconds 1
+    $s2 = (Get-CimInstance -ClassName Win32_Processor).LoadPercentage
+    $avg = ($s1 + $s2) / 2
+    return [math]::Round($avg, 1)
 }
 
-function Get-MemoryUsage {
+# ── Memory ────────────────────────────────────────────────────────────────────
+function Get-MemoryInfo {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    $used = $os.TotalVisibleMemorySize - $os.FreePhysicalMemory
-    return [math]::Round(($used / $os.TotalVisibleMemorySize) * 100, 1)
+    $totalKB = $os.TotalVisibleMemorySize
+    $freeKB  = $os.FreePhysicalMemory
+    $usedKB  = $totalKB - $freeKB
+    return @{
+        pct      = [math]::Round(($usedKB / $totalKB) * 100, 1)
+        total_mb = [int][math]::Round($totalKB / 1024, 0)
+        total_gb = [math]::Round($totalKB / 1048576, 1)
+    }
 }
 
-function Get-RamGB {
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    return [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
-}
-
-function Get-DiskUsage {
-    # Aggregate across all fixed drives
-    $drives = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3"
-    $total = ($drives | Measure-Object -Property Size -Sum).Sum
-    $free  = ($drives | Measure-Object -Property FreeSpace -Sum).Sum
-    if ($total -eq 0) { return 0 }
-    return [math]::Round((($total - $free) / $total) * 100, 1)
-}
-
-function Get-DiskGB {
-    $drives = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3"
-    $total = ($drives | Measure-Object -Property Size -Sum).Sum
-    return [math]::Round($total / 1GB, 1)
+# ── Disk ──────────────────────────────────────────────────────────────────────
+function Get-DiskInfo {
+    $drives = Get-CimInstance -ClassName Win32_LogicalDisk -Filter 'DriveType=3'
+    $total  = ($drives | Measure-Object -Property Size -Sum).Sum
+    $free   = ($drives | Measure-Object -Property FreeSpace -Sum).Sum
+    $gb     = [math]::Round($total / 1GB, 1)
+    return @{
+        pct   = [math]::Round((($total - $free) / $total) * 100, 1)
+        total = "${gb}G"
+    }
 }
 
 function Get-DiskIOPS {
+    $iops = 0
     try {
-        $counters = Get-Counter '\PhysicalDisk(_Total)\Disk Transfers/sec' -SampleInterval 1 -MaxSamples 1
-        return [math]::Round($counters.CounterSamples[0].CookedValue, 0)
-    } catch {
-        return 0
-    }
-}
-
-function Get-LoadAverages {
-    # Windows has no native load average; approximate with CPU queue length
-    $q1 = 0
-    try {
-        $q1 = (Get-Counter '\System\Processor Queue Length' -SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue
+        $iops = [math]::Round(
+            (Get-Counter '\PhysicalDisk(_Total)\Disk Transfers/sec' -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop
+            ).CounterSamples[0].CookedValue, 0)
     } catch { }
-    # Return the same value for all three windows (best approximation)
-    return @{ load_1 = [math]::Round($q1, 2); load_5 = [math]::Round($q1, 2); load_15 = [math]::Round($q1, 2) }
+    return $iops
 }
 
+# ── Network throughput ─────────────────────────────────────────────────────────
 function Get-NetworkBps {
-    # Sample twice 1 second apart to get bytes/sec
-    $nics = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"
-    $nicNames = $nics | Select-Object -ExpandProperty Description
-
-    $s1 = Get-Counter -Counter '\Network Interface(*)\Bytes Received/sec','\Network Interface(*)\Bytes Sent/sec' -SampleInterval 1 -MaxSamples 1 -ErrorAction SilentlyContinue
-
+    $s = Get-Counter '\Network Interface(*)\Bytes Received/sec','\Network Interface(*)\Bytes Sent/sec' `
+         -SampleInterval 1 -MaxSamples 1 -ErrorAction SilentlyContinue
     $rx = 0; $tx = 0
-    if ($s1) {
-        foreach ($s in $s1.CounterSamples) {
-            if ($s.Path -match 'Bytes Received') { $rx += $s.CookedValue }
-            if ($s.Path -match 'Bytes Sent')     { $tx += $s.CookedValue }
+    if ($s) {
+        foreach ($c in $s.CounterSamples) {
+            if ($c.Path -match 'Bytes Received') { $rx += $c.CookedValue }
+            elseif ($c.Path -match 'Bytes Sent')  { $tx += $c.CookedValue }
         }
     }
-    return @{ rx = [math]::Round($rx, 0); tx = [math]::Round($tx, 0) }
+    return @{ rx = [long][math]::Round($rx, 0); tx = [long][math]::Round($tx, 0) }
 }
 
-function Get-Interfaces {
+# ── Load (processor queue approximation) ──────────────────────────────────────
+function Get-LoadAverages {
+    $q = 0
+    try {
+        $q = (Get-Counter '\System\Processor Queue Length' -SampleInterval 1 -MaxSamples 1 -ErrorAction Stop
+             ).CounterSamples[0].CookedValue
+    } catch { }
+    $q = [math]::Round($q, 2)
+    return @{ load_1 = $q; load_5 = $q; load_15 = $q }
+}
+
+# ── Uptime string ─────────────────────────────────────────────────────────────
+function Get-UptimeString {
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    $ts = $os.LocalDateTime - $os.LastBootUpTime
+    $d = [int]$ts.Days; $h = [int]$ts.Hours; $m = [int]$ts.Minutes
+    $parts = @()
+    if ($d -gt 0) { $parts += "$d day$(if($d -ne 1){'s'})" }
+    if ($h -gt 0) { $parts += "$h hour$(if($h -ne 1){'s'})" }
+    if ($m -gt 0 -or $parts.Count -eq 0) { $parts += "$m minute$(if($m -ne 1){'s'})" }
+    return $parts -join ', '
+}
+
+# ── Network interfaces ─────────────────────────────────────────────────────────
+function Get-NetworkInterfaces {
     $result = @()
-    $nics = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter "IPEnabled=True"
-    foreach ($nic in $nics) {
-        $ip = if ($nic.IPAddress) { $nic.IPAddress[0] } else { '' }
+    $adapters = Get-CimInstance -ClassName Win32_NetworkAdapter -Filter 'NetEnabled=True' -ErrorAction SilentlyContinue
+    $configs  = Get-CimInstance -ClassName Win32_NetworkAdapterConfiguration -Filter 'IPEnabled=True' -ErrorAction SilentlyContinue
+
+    foreach ($cfg in $configs) {
+        $adapter  = $adapters | Where-Object { $_.DeviceID -eq $cfg.Index } | Select-Object -First 1
+        $state    = if ($adapter -and $adapter.NetConnectionStatus -eq 2) { 'UP' } else { 'DOWN' }
+        $ip4      = if ($cfg.IPAddress) { ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' } | Select-Object -First 1) } else { '' }
+        $ip6      = if ($cfg.IPAddress) { ($cfg.IPAddress | Where-Object { $_ -match ':' } | Select-Object -First 1) } else { '' }
+        $mac      = if ($cfg.MACAddress) { $cfg.MACAddress } else { '' }
+
+        # Try to get link speed in Mbps
+        $speed = ''
+        if ($adapter) {
+            try {
+                $speedBps = (Get-NetAdapter -InterfaceIndex $adapter.InterfaceIndex -ErrorAction Stop).LinkSpeed
+                if ($speedBps -match '(\d+)\s*(Gbps|Mbps|Kbps)') {
+                    $val  = [int]$Matches[1]
+                    $unit = $Matches[2]
+                    $speed = switch ($unit) {
+                        'Gbps' { "$($val * 1000)Mb/s" }
+                        'Mbps' { "${val}Mb/s" }
+                        'Kbps' { "${val}Kb/s" }
+                    }
+                }
+            } catch { }
+        }
+
         $result += @{
-            name  = $nic.Description
-            ip    = $ip
-            speed = 0   # link speed not reliably available via WMI without extra queries
+            name  = $cfg.Description
+            state = $state
+            ip4   = if ($ip4) { "$ip4/$($cfg.IPSubnet[0])" } else { '' }
+            ip6   = if ($ip6) { $ip6 } else { '' }
+            mac   = $mac
+            speed = $speed
         }
     }
     return $result
 }
 
-function Get-UptimeSeconds {
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    return [math]::Round(($os.LocalDateTime - $os.LastBootUpTime).TotalSeconds, 0)
+# ── DNS servers ───────────────────────────────────────────────────────────────
+function Get-DnsServers {
+    try {
+        $dns = Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction Stop |
+               Where-Object { $_.ServerAddresses } |
+               ForEach-Object { $_.ServerAddresses } |
+               Select-Object -Unique
+        return ($dns -join ', ')
+    } catch { return '' }
 }
 
-function Get-OSInfo {
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem
-    return $os.Caption.Trim()
-}
-
-function Get-KernelVersion {
-    return (Get-CimInstance -ClassName Win32_OperatingSystem).Version
-}
-
-function Get-CpuModel {
-    return (Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1).Name.Trim()
-}
-
-function Get-CpuCores {
-    return (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
-}
-
-function Get-RunningServices {
-    $svcMap = [ordered]@{
-        mysql      = @('MySQL', 'MySQL80', 'MySQL57')
-        postgresql = @('postgresql', 'postgresql-x64-14', 'postgresql-x64-15', 'postgresql-x64-16')
-        nginx      = @('nginx')
-        iis        = @('W3SVC')
-        redis      = @('Redis', 'Redis-x64-*')
-        mssql      = @('MSSQLSERVER', 'MSSQL$*')
-        mongodb    = @('MongoDB')
-        rabbitmq   = @('RabbitMQ')
-        elasticsearch = @('elasticsearch-service-x64')
+# ── Docker (Docker Desktop on Windows) ────────────────────────────────────────
+function Get-DockerInfo {
+    $dockerBin = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $dockerBin) {
+        return @{ present = $false; count = 0; containers = @() }
     }
-
-    $running = @{}
-    $allSvcs = Get-Service -ErrorAction SilentlyContinue
-
-    foreach ($name in $svcMap.Keys) {
-        $patterns = $svcMap[$name]
-        $found = $false
-        foreach ($pattern in $patterns) {
-            if ($allSvcs | Where-Object { $_.Name -like $pattern -and $_.Status -eq 'Running' }) {
-                $found = $true; break
+    try {
+        $running = & docker ps -q 2>$null | Measure-Object | Select-Object -ExpandProperty Count
+        $lines   = & docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}' 2>$null
+        $containers = @()
+        foreach ($line in $lines) {
+            if (-not $line) { continue }
+            $parts = $line -split '\|', 4
+            $containers += @{
+                name   = $parts[0]
+                image  = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+                status = if ($parts.Count -gt 2) { $parts[2] } else { '' }
+                ports  = if ($parts.Count -gt 3) { $parts[3] } else { '' }
             }
         }
-        $running[$name] = $found
+        return @{ present = $true; count = $running; containers = $containers }
+    } catch {
+        return @{ present = $true; count = 0; containers = @() }
     }
-    return $running
 }
 
-# ── HTTP helpers ───────────────────────────────────────────────────────────────
-function Invoke-JsonPost {
-    param([string]$Url, [hashtable]$Body)
-    $json = $Body | ConvertTo-Json -Depth 10 -Compress
-    $response = Invoke-RestMethod -Uri $Url -Method Post `
-        -ContentType 'application/json' `
-        -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) `
-        -UseBasicParsing
-    return $response
+# ── Services ──────────────────────────────────────────────────────────────────
+function Get-RunningServices {
+    $svcMap = [ordered]@{
+        mysql         = @('MySQL','MySQL80','MySQL57','MySQL56')
+        mariadb       = @('MariaDB')
+        postgresql    = @('postgresql','postgresql-x64-14','postgresql-x64-15','postgresql-x64-16')
+        nginx         = @('nginx')
+        apache2       = @('Apache2.4','Apache2','httpd')
+        iis           = @('W3SVC')
+        postfix       = @('Postfix')
+        redis         = @('Redis','Redis-x64-*')
+        mongod        = @('MongoDB')
+        rabbitmq      = @('RabbitMQ')
+        elasticsearch = @('elasticsearch-service-x64','elasticsearch')
+        mssql         = @('MSSQLSERVER','MSSQL$*')
+    }
+    $allSvcs = Get-Service -ErrorAction SilentlyContinue
+    $result  = @()
+    foreach ($name in $svcMap.Keys) {
+        foreach ($pat in $svcMap[$name]) {
+            if ($allSvcs | Where-Object { $_.Name -like $pat -and $_.Status -eq 'Running' }) {
+                $result += @{ name = $name; active = $true }
+                break
+            }
+        }
+    }
+    return $result
 }
 
-# ── Agent config fetch ─────────────────────────────────────────────────────────
-function Get-AgentInterval {
-    param($cfg)
-    try {
-        $resp = Invoke-JsonPost -Url "$($cfg.server_url)?action=agent-config" -Body @{ agent_key = $cfg.agent_key }
-        if ($resp.interval) { return [int]$resp.interval }
-    } catch { }
-    return 15  # default fallback
+# ── OS info ───────────────────────────────────────────────────────────────────
+function Get-OSInfo {
+    $os = Get-CimInstance -ClassName Win32_OperatingSystem
+    return @{
+        name    = $os.Caption.Trim()
+        kernel  = $os.Version
+    }
+}
+
+function Get-CpuInfo {
+    $cpu   = Get-CimInstance -ClassName Win32_Processor | Select-Object -First 1
+    $cores = (Get-CimInstance -ClassName Win32_Processor | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum
+    return @{ model = $cpu.Name.Trim(); cores = [int]$cores }
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
-$cfg = Read-Config
-
+$cfg = Read-Config -Path $ConfigFile
 Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Collecting metrics for $($cfg.hostname)..."
 
-$net  = Get-NetworkBps
-$load = Get-LoadAverages
-$disk_iops = 0
-try { $disk_iops = Get-DiskIOPS } catch { }
+# Collect everything
+$mem    = Get-MemoryInfo
+$disk   = Get-DiskInfo
+$net    = Get-NetworkBps
+$load   = Get-LoadAverages
+$ifaces = @(Get-NetworkInterfaces)
+$docker = Get-DockerInfo
+$os     = Get-OSInfo
+$cpu    = Get-CpuInfo
+$iops   = Get-DiskIOPS
+$cpuPct = Get-CpuUsage
 
 $payload = @{
     agent_key      = $cfg.agent_key
     hostname       = $cfg.hostname
-    cpu_usage      = Get-CpuUsage
-    memory_usage   = Get-MemoryUsage
-    disk_usage     = Get-DiskUsage
-    disk_iops      = $disk_iops
+    public_ip      = Get-PublicIPv4
+    ipv6           = Get-PublicIPv6
+    fqdn           = Get-FQDN
+    cpu_usage      = $cpuPct
+    memory_usage   = $mem.pct
+    memory_total_mb= $mem.total_mb
+    disk_usage     = $disk.pct
+    disk_iops      = $iops
     network_rx_bps = $net.rx
     network_tx_bps = $net.tx
-    mail_queue     = 0
+    mail_queue     = $null
     load_1         = $load.load_1
     load_5         = $load.load_5
     load_15        = $load.load_15
-    timestamp      = [int][double]::Parse((Get-Date -UFormat %s))
+    collected_at   = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     timezone       = [System.TimeZoneInfo]::Local.Id
-    cores          = Get-CpuCores
-    cpu_model      = Get-CpuModel
-    ram_gb         = Get-RamGB
-    disk_gb        = Get-DiskGB
-    os             = Get-OSInfo
-    kernel         = Get-KernelVersion
-    uptime_seconds = Get-UptimeSeconds
-    interfaces     = @(Get-Interfaces)
-    docker_running = 0
-    services       = Get-RunningServices
+    system_info    = @{
+        cpu_cores         = $cpu.cores
+        cpu_model         = $cpu.model
+        ram_total_gb      = $mem.total_gb
+        disk_total        = $disk.total
+        os                = $os.name
+        kernel            = $os.kernel
+        uptime            = Get-UptimeString
+        net_interfaces    = $ifaces
+        iface_count       = $ifaces.Count
+        dns_servers       = Get-DnsServers
+        docker            = $docker.present
+        docker_count      = $docker.count
+        docker_containers = @($docker.containers)
+        services          = @(Get-RunningServices)
+    }
 }
 
 try {
-    $resp = Invoke-JsonPost -Url "$($cfg.server_url)?action=ingest" -Body $payload
+    $json = $payload | ConvertTo-Json -Depth 10 -Compress
+    $resp = Invoke-RestMethod `
+        -Uri "$($cfg.server_url)?action=ingest" `
+        -Method Post `
+        -ContentType 'application/json' `
+        -Body ([System.Text.Encoding]::UTF8.GetBytes($json)) `
+        -UseBasicParsing
     Write-Host "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] OK: $($resp | ConvertTo-Json -Compress)"
 } catch {
     Write-Error "Failed to send metrics: $_"
