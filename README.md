@@ -4,6 +4,21 @@
 
 This is a **pet project** — built for personal use to monitor Ubuntu servers. It's intentionally minimal: no frameworks, no build steps, no dependencies beyond what's already on a standard LAMP stack. If you find it useful or want to improve it, contributions are welcome.
 
+## Plugins
+
+Sermony has a plugin system with 6 included plugins:
+
+| Plugin | Description |
+|--------|-------------|
+| [Credential Vault](plugins/vault/) | Encrypted server credential storage (AES-256-GCM, client-side crypto, shared vault key) |
+| [API Key Manager](plugins/api-keys/) | Track API keys across servers — where used, spending, expiry dates |
+| [API Monitor](plugins/api-monitor/) | HTTP endpoint monitoring with cron runner, auth support, SSRF protection |
+| [PM2 Monitor](plugins/pm2/) | Monitor PM2 processes across servers with own agent script |
+| [Open Ports](plugins/ports/) | Scan and display listening TCP/UDP ports, programs, and bind addresses |
+| [Example](plugins/example/) | Reference template with all hooks documented |
+
+Plugins with agents (PM2, Ports) have their own `agent.sh` scripts deployed separately to monitored servers. Plugins with own pages (API Keys, API Monitor) add links in the header nav.
+
 ## Screenshots
 
 ### Login
@@ -18,7 +33,7 @@ This is a **pet project** — built for personal use to monitor Ubuntu servers. 
 ### Datagrid View (sortable by CPU, RAM, disk, cores, load)
 ![Datagrid](screenshots/datagrid.png)
 
-### Server Detail (system info, NICs, Docker, services, sparklines)
+### Server Detail (system info, NICs, Docker, services, charts)
 ![Server Detail](screenshots/server-detail.png)
 
 ### Settings
@@ -71,37 +86,51 @@ That's it. Servers appear on the dashboard automatically.
 
 ## Features
 
-- Password-protected dashboard with session-based auth
+### Dashboard
 - Three view modes: card grid, compact list, sortable datagrid
 - Datagrid with sortable columns: name, CPU cores, CPU%, RAM, Mem%, disk total, Disk%, IOPS, load
 - Fullscreen mode for wide monitors
-- Search/filter servers by name, IP, FQDN, services, Docker images, PM2 processes, OS, CPU model
+- Search/filter by name, IP, FQDN, services, Docker, PM2 processes, ports, OS, CPU model
 - Clickable status pills to filter by: online, offline, critical, warning, stale
 - Dark/light theme (follows OS preference, manual toggle)
-- Sparkline charts on server detail page (CPU/memory/disk trends)
-- System info: CPU model/cores, RAM, disk, OS, kernel, uptime, network interfaces, DNS, Docker, services
-- Per-interface details: name, state (UP/DOWN), IPv4, IPv6, MAC, link speed
-- Docker container listing with image, status, and ports
-- Active service detection (mysql, postgresql, nginx, postfix, redis, etc.)
-- Auto-refresh dashboard without full page reload
+- Auto-refresh without full page reload
 - Browser notifications when servers go critical/offline/recover
 - Drag-and-drop card reordering (persisted)
 - Auto-sort by severity: critical > warning > stale > offline > healthy
-- Stale detection — servers that miss expected check-ins get flagged
-- Per-server configurable check intervals and alert thresholds (agents auto-update their cron)
-- Email and webhook notifications with configurable cooldown
-- Status badges: CRITICAL, WARNING, STALE, OFFLINE
-- Custom display names and notes per server (notes shown as tooltip on hover)
-- One-click IP copy with configurable SSH username (copies `user@ip`)
-- Server timezone display on dashboard cards
+- One-click IP copy with configurable SSH username
+
+### Server Detail
+- SVG line charts for CPU, memory, disk with threshold lines
+- System info: CPU model/cores, RAM, disk, OS, kernel, uptime
+- Per-interface network details: IPv4, IPv6, MAC, link speed
+- Docker container listing with image, status, and ports
+- Active service detection (mysql, postgresql, nginx, postfix, redis, etc.)
+- Open ports table with program, PID, user, and bind address
+- PM2 process table (if PM2 plugin agent deployed)
+- Custom display names and notes
+- Metrics history with configurable retention (default 48h)
 - Export metrics as CSV
-- Server detail page with metrics history (responsive on mobile)
+
+### Monitoring & Alerts
+- Stale detection — servers that miss expected check-ins get flagged
+- Per-server configurable check intervals and alert thresholds
+- Agents auto-update their cron interval from dashboard settings
+- Email and webhook notifications with configurable cooldown
+- API/URL endpoint monitoring with HTTP status and response validation
+
+### Security
+- Password-protected dashboard (bcrypt, session-based)
+- CSRF protection on all forms and JSON endpoints
+- Login rate limiting (5 attempts, 15-minute lockout)
+- Secure session cookies (SameSite=Strict, HttpOnly, Secure)
+- 8-hour session timeout
+- Content-Security-Policy header
+- Prepared statements for all SQL
 - Enrollment key rotation with old key management
 - Agent key rotation per server
-- Secure enrollment flow (unique per-agent keys)
-- Graceful degradation when agent tools are missing
-- Plugin system for custom extensions
-- Automatic metric retention cleanup
+- Login audit log
+- API IP allowlist
+- Auto-generated `.htaccess` to block database file access
 
 ## Files
 
@@ -113,9 +142,9 @@ That's it. Servers appear on the dashboard automatically.
 | `fake-agents.sh` | Test script — creates 10 fake servers with various health states |
 | `plugins/` | Plugin directory — drop-in PHP plugins for custom extensions |
 
-## Plugins
+## Plugin System
 
-Sermony supports a simple plugin system. Each plugin is a folder inside `plugins/` containing a `plugin.php` file that returns an array of hooks.
+Each plugin is a folder inside `plugins/` containing a `plugin.php` that returns an array of hooks. Plugins can add dashboard widgets, datagrid columns, server detail sections, settings panels, custom pages, search terms, and their own agent scripts.
 
 ### Available Hooks
 
@@ -133,15 +162,6 @@ Sermony supports a simple plugin system. Each plugin is a folder inside `plugins
 | `header_links` | Header navigation area | — |
 | `custom_action` | Handle custom URL actions | `$action` |
 | `search_data` | Add terms to search index (filter) | `$parts`, `$server` |
-
-### Included Plugins
-
-| Plugin | Description |
-|--------|-------------|
-| [Credential Vault](plugins/vault/) | Encrypted server credential storage (AES-256-GCM, client-side crypto) |
-| [API Key Manager](plugins/api-keys/) | Track API keys across servers — where used, spending, expiry |
-| [PM2 Monitor](plugins/pm2/) | Monitor PM2 processes across servers with own agent script |
-| [Example](plugins/example/) | Reference template with all hooks documented |
 
 ### Creating a Plugin
 
@@ -170,23 +190,6 @@ return [
 ```
 
 See `plugins/example/plugin.php` for a complete reference with all hooks documented.
-
-## Security
-
-- Password-protected dashboard (bcrypt, session-based)
-- CSRF protection on all POST forms and JSON endpoints
-- Login rate limiting (5 attempts, 15-minute lockout)
-- Secure session cookies (SameSite=Strict, HttpOnly, Secure over HTTPS)
-- 8-hour session timeout
-- Content-Security-Policy header
-- Prepared statements for all SQL
-- `hash_equals()` for enrollment key and CSRF comparison
-- Unique 64-char hex agent key per server (rotatable)
-- Enrollment key rotation — old keys stay active until explicitly invalidated
-- Login audit log (IP, timestamp, success/fail)
-- Optional API IP allowlist for enroll/ingest endpoints
-- Auto-generated `.htaccess` to block direct database file access
-- Agent config stored chmod 600
 
 ## Uninstall agent
 
