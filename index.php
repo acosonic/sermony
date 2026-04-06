@@ -626,6 +626,17 @@ function handleIngest(): never {
     $ak = (string)($in['agent_key'] ?? '');
     if ($ak === '') jsonErr('Missing agent_key', 401);
 
+    // Decrypt if payload is encrypted
+    if (!empty($in['encrypted']) && isset($in['data'], $in['iv'])) {
+        $encKey = hash('sha256', $ak); // same derivation as agent
+        $iv = hex2bin($in['iv']);
+        $decrypted = openssl_decrypt(base64_decode($in['data']), 'aes-256-cbc', hex2bin($encKey), OPENSSL_RAW_DATA, $iv);
+        if ($decrypted === false) jsonErr('Decryption failed', 403);
+        $in = json_decode($decrypted, true);
+        if (!$in) jsonErr('Invalid decrypted JSON');
+        $ak = (string)($in['agent_key'] ?? $ak);
+    }
+
     $d = db();
     $s = $d->prepare('SELECT * FROM servers WHERE agent_key=:k');
     $s->bindValue(':k', $ak, SQLITE3_TEXT);

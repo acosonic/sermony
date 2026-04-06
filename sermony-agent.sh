@@ -164,9 +164,8 @@ services_json+="]"
 
 # ─── Send ─────────────────────────────────────────────────────
 
-curl -sf --max-time 15 -X POST \
-    -H "Content-Type: application/json" \
-    -d "{
+# Build JSON payload
+PAYLOAD="{
   \"agent_key\":\"${AGENT_KEY}\",
   \"hostname\":\"${HOST}\",
   \"public_ip\":\"${PUBLIC_IP}\",
@@ -201,7 +200,26 @@ curl -sf --max-time 15 -X POST \
     \"docker_containers\":${docker_containers_json},
     \"services\":${services_json}
   }
-}" "${SERVER_URL}/?action=ingest" >/dev/null
+}"
+
+# Encrypt payload with AES-256-CBC using agent_key as key
+ENC_KEY=$(echo -n "${AGENT_KEY}" | sha256sum | awk '{print $1}')
+IV=$(openssl rand -hex 16)
+ENCRYPTED=$(echo -n "$PAYLOAD" | openssl enc -aes-256-cbc -K "$ENC_KEY" -iv "$IV" -base64 -A 2>/dev/null)
+
+if [[ -n "$ENCRYPTED" ]]; then
+    # Send encrypted
+    curl -sf --max-time 15 -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"agent_key\":\"${AGENT_KEY}\",\"encrypted\":true,\"iv\":\"${IV}\",\"data\":\"${ENCRYPTED}\"}" \
+        "${SERVER_URL}/?action=ingest" >/dev/null
+else
+    # Fallback: send plain (if openssl not available)
+    curl -sf --max-time 15 -X POST \
+        -H "Content-Type: application/json" \
+        -d "$PAYLOAD" \
+        "${SERVER_URL}/?action=ingest" >/dev/null
+fi
 
 # ─── Pull config from server (auto-adjust interval) ───────────
 
