@@ -1,8 +1,20 @@
 # Sermony
 
-**Ser**ver **Mon**itoring Harmon**y** — simple, self-hosted server monitoring. One PHP file, one SQLite database, one Bash agent.
+**Ser**ver **Mon**itoring Harmon**y** — simple, self-hosted server monitoring. One PHP file, one SQLite database, one lightweight agent script.
 
 This is a **pet project** — built for personal use to monitor Ubuntu servers. It's intentionally minimal: no frameworks, no build steps, no dependencies beyond what's already on a standard LAMP stack. If you find it useful or want to improve it, contributions are welcome.
+
+## How It Works
+
+Each monitored server runs a small agent script — a single Bash script (`sermony-agent.sh`) on Linux or a PowerShell script on Windows. The agent collects system metrics (CPU, memory, disk, network, etc.) and sends them as a JSON payload via HTTPS POST to the central Sermony server. No proprietary protocols, no persistent connections — just a simple HTTP request every N minutes from cron (Linux) or Task Scheduler (Windows).
+
+```
+[Server 1] sermony-agent.sh → HTTPS POST JSON → [Sermony Dashboard]
+[Server 2] sermony-agent.sh → HTTPS POST JSON → [Sermony Dashboard]
+[Server 3] sermony-agent.ps1 → HTTPS POST JSON → [Sermony Dashboard]
+```
+
+The dashboard receives the data via the `?action=ingest` endpoint, validates the agent key, stores the metrics in SQLite, and displays everything in real time. Plugin agents (PM2, Ports) work the same way — they're separate scripts that POST their data to `?action=plugin-data`.
 
 ## Plugins
 
