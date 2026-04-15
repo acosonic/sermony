@@ -465,6 +465,7 @@ match ($action) {
     'ingest'         => (function(){ checkApiIpAllowlist(); handleIngest(); })(),
     'agent-config'   => (function(){ checkApiIpAllowlist(); handleAgentConfig(); })(),
     'plugin-data'    => (function(){ checkApiIpAllowlist(); handlePluginData(); })(),
+    'notify'         => (function(){ doHook('custom_action', 'notify'); exit; })(),
     'plugin-agent'   => servePluginAgent(),
     'install-script' => serveScript('install.sh'),
     'agent-script'   => serveScript('sermony-agent.sh'),
