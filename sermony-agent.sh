@@ -162,6 +162,50 @@ for svc in mysql mariadb postgresql nginx apache2 httpd postfix dovecot exim4 re
 done
 services_json+="]"
 
+# ─── Virtualization & hosting detection ───────────────────────
+virt_type="physical"
+if command -v systemd-detect-virt &>/dev/null; then
+    v=$(systemd-detect-virt 2>/dev/null || echo "none")
+    [[ "$v" != "none" ]] && virt_type="$v"
+elif [[ -f /sys/class/dmi/id/product_name ]]; then
+    pn=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
+    case "$pn" in *Virtual*|*KVM*|*QEMU*) virt_type="kvm";; *VMware*) virt_type="vmware";; *VirtualBox*) virt_type="virtualbox";; *Xen*) virt_type="xen";; esac
+elif grep -qi docker /proc/1/cgroup 2>/dev/null; then
+    virt_type="docker"
+fi
+
+machine_type="Physical"
+case "$virt_type" in
+    kvm|qemu) machine_type="VPS";;
+    vmware|virtualbox|xen|microsoft|hyperv) machine_type="VM";;
+    lxc|lxc-libvirt|openvz|systemd-nspawn) machine_type="Container";;
+    docker) machine_type="Docker";;
+    none|physical) machine_type="Physical";;
+    *) machine_type="VPS";;
+esac
+
+# Detect hosting provider from reverse DNS or known markers
+hosting_provider=""
+rdns=$(dig -x "${PUBLIC_IP}" +short 2>/dev/null | head -1 | sed 's/\.$//')
+if [[ -z "$rdns" ]]; then rdns=$(host "$PUBLIC_IP" 2>/dev/null | awk '/pointer/ {print $NF}' | sed 's/\.$//'); fi
+case "${rdns,,}" in
+    *ovh*|*ovhcloud*) hosting_provider="OVH";;
+    *contabo*) hosting_provider="Contabo";;
+    *amazonaws*|*aws*) hosting_provider="AWS";;
+    *digitalocean*) hosting_provider="DigitalOcean";;
+    *hetzner*) hosting_provider="Hetzner";;
+    *linode*|*akamai*) hosting_provider="Linode";;
+    *vultr*) hosting_provider="Vultr";;
+    *google*|*gcloud*) hosting_provider="Google Cloud";;
+    *azure*|*microsoft*) hosting_provider="Azure";;
+    *scaleway*) hosting_provider="Scaleway";;
+esac
+# Fallback: check /sys/class/dmi
+if [[ -z "$hosting_provider" && -f /sys/class/dmi/id/sys_vendor ]]; then
+    vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)
+    case "$vendor" in *OVH*) hosting_provider="OVH";; *Amazon*) hosting_provider="AWS";; *Google*) hosting_provider="Google Cloud";; *Microsoft*) hosting_provider="Azure";; *Hetzner*) hosting_provider="Hetzner";; esac
+fi
+
 # ─── Send ─────────────────────────────────────────────────────
 
 # Build JSON payload
@@ -198,7 +242,10 @@ PAYLOAD="{
     \"docker\":${has_docker},
     \"docker_count\":${docker_count},
     \"docker_containers\":${docker_containers_json},
-    \"services\":${services_json}
+    \"services\":${services_json},
+    \"virt_type\":\"${virt_type}\",
+    \"machine_type\":\"${machine_type}\",
+    \"hosting_provider\":\"${hosting_provider}\"
   }
 }"
 

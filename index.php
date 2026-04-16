@@ -952,7 +952,7 @@ function showDashboard(): never {
             elseif ($health==='warn') $cls .= ' card-warn';
             elseif ($stale) $cls .= ' card-stale';
             $si = json_decode($srv['system_info'] ?? '{}', true) ?: [];
-            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
+            $searchParts = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? '', $si['machine_type'] ?? '', $si['hosting_provider'] ?? '', $si['virt_type'] ?? ''];
             foreach ($si['services'] ?? [] as $svc) $searchParts[] = $svc['name'] ?? '';
             if (!empty($si['docker'])) $searchParts[] = 'docker';
             foreach ($si['docker_containers'] ?? [] as $dc) { $searchParts[] = $dc['name'] ?? ''; $searchParts[] = $dc['image'] ?? ''; }
@@ -974,7 +974,7 @@ function showDashboard(): never {
                     <button type="submit" class="btn-del" title="Delete server">&times;</button>
                 </form>
             </div>
-            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if (!empty($srv['ipv6'])): ?> &middot; <span class="ipv6-tag" title="<?=e($srv['ipv6'])?>"><?=e(strlen($srv['ipv6']) > 20 ? substr($srv['ipv6'], 0, 18) . '..' : $srv['ipv6'])?></span><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?><?php if (!empty($srv['timezone'])): ?> &middot; <span class="tz-badge"><?=e($srv['timezone'])?></span><?php endif; ?></div>
+            <div class="card-meta"><?php if ($srv['public_ip']): ?><span class="ip-copy" onclick="event.stopPropagation();copyText('<?=e((setting('default_ssh_user') ?: 'ubuntu').'@'.$srv['public_ip'])?>',this)" title="Copy SSH login"><?=e($srv['public_ip'])?> <small>&#x2398;</small></span><?php else: ?><?="\xE2\x80\x94"?><?php endif; ?><?php if (!empty($srv['ipv6'])): ?> &middot; <span class="ipv6-tag" title="<?=e($srv['ipv6'])?>"><?=e(strlen($srv['ipv6']) > 20 ? substr($srv['ipv6'], 0, 18) . '..' : $srv['ipv6'])?></span><?php endif; ?><?php if ($srv['fqdn']): ?> &middot; <?=e($srv['fqdn'])?><?php endif; ?><?php if (!empty($srv['timezone'])): ?> &middot; <span class="tz-badge"><?=e($srv['timezone'])?></span><?php endif; ?><?php if (!empty($si['machine_type'])): ?> &middot; <span class="tz-badge" title="<?=e(($si['hosting_provider'] ?? '') . ' ' . ($si['virt_type'] ?? ''))?>"><?=e($si['machine_type'])?><?php if (!empty($si['hosting_provider'])): ?> / <?=e($si['hosting_provider'])?><?php endif; ?></span><?php endif; ?></div>
             <div class="metrics">
                 <div class="m"><span class="ml">CPU</span><span class="mv"><?=$cpu!==null ? number_format((float)$cpu,1).'%' : "\xE2\x80\x94"?></span><?php if ($cpu!==null):?><div class="bar"><div style="width:<?=min((float)$cpu,100)?>%;background:<?=mColorFor('cpu',(float)$cpu,$srv)?>"></div></div><?php endif;?></div>
                 <div class="m"><span class="ml">Memory</span><span class="mv"><?=$mem!==null ? number_format((float)$mem,1).'%' : "\xE2\x80\x94"?><?php if($srv['memory_total_mb']):?> <small>(<?=number_format((int)$srv['memory_total_mb'])?>MB)</small><?php endif;?></span><?php if($mem!==null):?><div class="bar"><div style="width:<?=min((float)$mem,100)?>%;background:<?=mColorFor('mem',(float)$mem,$srv)?>"></div></div><?php endif;?></div>
@@ -1020,7 +1020,7 @@ function showDashboard(): never {
                 $diskTotalNum = (float)preg_replace('/[^0-9.]/', '', $diskTotal);
                 $statusTxt = !$on ? 'OFFLINE' : ($stale ? 'STALE' : ($health==='crit' ? 'CRITICAL' : ($health==='warn' ? 'WARNING' : 'OK')));
                 $statusCls = !$on ? 'badge-off' : ($stale ? 'badge-stale' : ($health==='crit' ? 'badge-crit' : ($health==='warn' ? 'badge-warn' : '')));
-                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? ''];
+                $dgSearch = [$srv['display_name'] ?? '', $srv['hostname'], $srv['public_ip'] ?? '', $srv['ipv6'] ?? '', $srv['fqdn'] ?? '', $si['os'] ?? '', $si['cpu_model'] ?? '', $srv['timezone'] ?? '', $si['machine_type'] ?? '', $si['hosting_provider'] ?? '', $si['virt_type'] ?? ''];
                 foreach ($si['services'] ?? [] as $svc) $dgSearch[] = $svc['name'] ?? '';
                 if (!empty($si['docker'])) $dgSearch[] = 'docker';
                 foreach ($si['docker_containers'] ?? [] as $dc) { $dgSearch[] = $dc['name'] ?? ''; $dgSearch[] = $dc['image'] ?? ''; }
@@ -1108,6 +1108,8 @@ function showServer(): never {
                 ?>
                 <?php if (!empty($sysInfo['dns_servers'])): ?><div><span class="sys-label">DNS</span><span class="sys-val"><?=e((string)$sysInfo['dns_servers'])?></span></div><?php endif; ?>
                 <div><span class="sys-label">Docker</span><span class="sys-val"><?=!empty($sysInfo['docker']) ? 'Yes (' . (int)($sysInfo['docker_count'] ?? $sysInfo['docker_containers'] ?? 0) . ' running)' : 'No'?></span></div>
+                <?php if (!empty($sysInfo['machine_type'])): ?><div><span class="sys-label">Type</span><span class="sys-val"><?=e((string)$sysInfo['machine_type'])?><?php if (!empty($sysInfo['virt_type']) && $sysInfo['virt_type'] !== 'physical'): ?> (<?=e((string)$sysInfo['virt_type'])?>)<?php endif; ?></span></div><?php endif; ?>
+                <?php if (!empty($sysInfo['hosting_provider'])): ?><div><span class="sys-label">Hosting</span><span class="sys-val"><?=e((string)$sysInfo['hosting_provider'])?></span></div><?php endif; ?>
                 <?php
                 $services = $sysInfo['services'] ?? [];
                 if (!empty($services) && is_array($services)):
