@@ -95,8 +95,9 @@ return [
                 jsonOut(['ok' => true]);
             }
 
-            // ── Vault rekey support ──────────────────────
+            // ── Vault rekey support (owner only) ──────────
             if ($action === 'api-keys-all') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $res = $d->query('SELECT id, encrypted_key FROM api_keys WHERE encrypted_key != ""');
                 $rows = [];
                 while ($r = $res->fetchArray(SQLITE3_ASSOC)) $rows[] = $r;
@@ -104,6 +105,7 @@ return [
             }
 
             if ($action === 'api-keys-bulk-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
                 if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
                 $in = json_decode(file_get_contents('php://input'), true);

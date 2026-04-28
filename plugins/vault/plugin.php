@@ -78,6 +78,7 @@ return [
             }
 
             if ($action === 'vault-all') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 vaultDb();
                 $res = db()->query('SELECT server_id, encrypted FROM vault');
                 $all = [];
@@ -92,6 +93,7 @@ return [
             }
 
             if ($action === 'vault-rekey-stats') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 vaultDb();
                 $vault = (int)db()->querySingle('SELECT COUNT(*) FROM vault');
                 $apiKeys = 0; $subs = 0;
@@ -101,6 +103,7 @@ return [
             }
 
             if ($action === 'vault-audit-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
                 if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
                 $in = json_decode(file_get_contents('php://input'), true) ?: [];
@@ -114,6 +117,7 @@ return [
             }
 
             if ($action === 'vault-bulk-save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $in = json_decode(file_get_contents('php://input'), true);
                 if (!$in) jsonErr('Invalid JSON');
                 $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
@@ -324,6 +328,7 @@ return [
 
         // Vault key management on settings page
         'settings_panel' => function () {
+            $isOwner = function_exists('currentUserIsOwner') && currentUserIsOwner();
             ?>
             <fieldset style="margin-top:1rem">
                 <legend>Credential Vault</legend>
@@ -336,9 +341,10 @@ return [
                     </label>
                     <p style="font-size:.75rem;color:var(--subtle);margin-top:.25rem">Sets the vault key in your browser session. Use this instead of entering it on each server page.</p>
 
+                    <?php if ($isOwner): ?>
                     <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
                         <strong style="font-size:.82rem">Change Vault Key</strong>
-                        <p style="font-size:.75rem;color:var(--subtle);margin:.25rem 0">Re-encrypts all stored credentials with a new key. Share the new key with your team.</p>
+                        <p style="font-size:.75rem;color:var(--subtle);margin:.25rem 0">Re-encrypts all stored credentials, API keys, and subscription passwords with a new key. <strong>Owner only.</strong></p>
                         <div style="display:flex;flex-direction:column;gap:.4rem;margin-top:.4rem">
                             <input type="password" id="vaultOldKey" placeholder="Current vault key" style="padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
                             <input type="password" id="vaultNewKey" placeholder="New vault key" style="padding:.35rem .6rem;border:1px solid var(--input-border);border-radius:6px;font-size:.82rem;background:var(--input-bg);color:var(--text)">
@@ -346,6 +352,9 @@ return [
                             <button onclick="vaultRekey()" class="btn-sm" style="align-self:flex-start">Change Vault Key</button>
                         </div>
                     </div>
+                    <?php else: ?>
+                    <p style="font-size:.75rem;color:var(--subtle);margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--card-border)">Changing the vault key requires the <strong>owner</strong> role.</p>
+                    <?php endif; ?>
                 </div>
             </fieldset>
             <script>

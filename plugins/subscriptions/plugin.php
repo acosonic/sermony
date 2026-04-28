@@ -128,8 +128,9 @@ return [
                 jsonOut(['ok' => true]);
             }
 
-            // ── Vault rekey support ──────────────────────
+            // ── Vault rekey support (owner only) ──────────
             if ($action === 'subscriptions-all') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $res = $d->query('SELECT id, encrypted_password FROM subscriptions WHERE encrypted_password != ""');
                 $rows = [];
                 while ($r = $res->fetchArray(SQLITE3_ASSOC)) $rows[] = $r;
@@ -137,6 +138,7 @@ return [
             }
 
             if ($action === 'subscriptions-bulk-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                if (function_exists('requireOwnerJson')) requireOwnerJson();
                 $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
                 if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
                 $in = json_decode(file_get_contents('php://input'), true);

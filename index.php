@@ -112,11 +112,17 @@ function db(): SQLite3 {
         $legacyRow = $i->querySingle('SELECT value FROM settings WHERE key=\'admin_password_hash\'', true);
         $legacyHash = $legacyRow['value'] ?? '';
         if ($legacyHash !== '') {
-            $st = $i->prepare('INSERT INTO users (username, password_hash, role) VALUES (\'admin\', :h, \'admin\')');
+            $st = $i->prepare('INSERT INTO users (username, password_hash, role) VALUES (\'admin\', :h, \'owner\')');
             $st->bindValue(':h', $legacyHash, SQLITE3_TEXT);
             $st->execute();
             $i->exec('DELETE FROM settings WHERE key=\'admin_password_hash\'');
         }
+    }
+    // Ensure at least one owner exists (migration for pre-role users)
+    $ownerCount = (int)$i->querySingle("SELECT COUNT(*) FROM users WHERE role='owner'");
+    $anyUsers = (int)$i->querySingle('SELECT COUNT(*) FROM users');
+    if ($ownerCount === 0 && $anyUsers > 0) {
+        $i->exec("UPDATE users SET role='owner' WHERE id=(SELECT MIN(id) FROM users)");
     }
     // Block direct access to .db files
     $ht = dirname(DB_FILE) . '/.htaccess';
@@ -437,6 +443,22 @@ function currentUser(): ?array {
     return $r ?: null;
 }
 
+function currentUserIsOwner(): bool {
+    $u = currentUser();
+    return $u && ($u['role'] ?? '') === 'owner';
+}
+
+function requireOwnerJson(): void {
+    if (!currentUserIsOwner()) jsonErr('Owner role required', 403);
+}
+
+function requireOwnerRedirect(string $msg = 'Owner role required.'): void {
+    if (!currentUserIsOwner()) {
+        header('Location: ?action=settings&user_err=' . urlencode($msg));
+        exit;
+    }
+}
+
 function audit(string $action, ?string $details = null, ?int $userId = null, ?string $username = null): void {
     if ($userId === null) {
         $u = currentUser();
@@ -547,6 +569,8 @@ match ($action) {
     'user-create'    => handleUserCreate(),
     'user-delete'    => handleUserDelete(),
     'user-password'  => handleUserPassword(),
+    'user-update'    => handleUserUpdate(),
+    'user-reset-password' => handleUserResetPassword(),
     'dashboard-json' => handleDashboardJson(),
     'export-csv'     => handleExportCsv(),
     'settings'       => ($_SERVER['REQUEST_METHOD'] === 'POST' ? handleSettings() : showSettings()),
@@ -613,7 +637,7 @@ function handleSetupPassword(): never {
     if (strlen($pw) < 6) { showSetupPassword('Password must be at least 6 characters.'); exit; }
     if ($pw !== $pw2) { showSetupPassword('Passwords do not match.'); exit; }
 
-    $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, \'admin\')');
+    $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, \'owner\')');
     $s->bindValue(':u', $username, SQLITE3_TEXT);
     $s->bindValue(':h', password_hash($pw, PASSWORD_BCRYPT), SQLITE3_TEXT);
     $s->execute();
@@ -621,7 +645,7 @@ function handleSetupPassword(): never {
     $_SESSION['sermony_auth'] = true;
     $_SESSION['sermony_user_id'] = $newId;
     $_SESSION['sermony_last_active'] = time();
-    audit('user.create', 'first user (setup)', $newId, $username);
+    audit('user.create', 'first user (setup, owner)', $newId, $username);
     header('Location: ?'); exit;
 }
 
@@ -871,8 +895,10 @@ function handleRotateAgentKey(): never {
 function handleUserCreate(): never {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
     verifyCsrf();
+    requireOwnerRedirect();
     $username = trim((string)($_POST['username'] ?? ''));
     $pw = (string)($_POST['password'] ?? '');
+    $role = ($_POST['role'] ?? 'admin') === 'owner' ? 'owner' : 'admin';
     if ($username === '' || strlen($pw) < 6) {
         header('Location: ?action=settings&user_err=' . urlencode('Username required and password must be at least 6 characters.')); exit;
     }
@@ -880,12 +906,13 @@ function handleUserCreate(): never {
         header('Location: ?action=settings&user_err=' . urlencode('Username must be 2-32 chars, letters/digits/._- only.')); exit;
     }
     try {
-        $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, \'admin\')');
+        $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, :r)');
         $s->bindValue(':u', $username, SQLITE3_TEXT);
         $s->bindValue(':h', password_hash($pw, PASSWORD_BCRYPT), SQLITE3_TEXT);
+        $s->bindValue(':r', $role, SQLITE3_TEXT);
         $s->execute();
         $newId = (int)db()->lastInsertRowID();
-        audit('user.create', 'created user "' . $username . '"');
+        audit('user.create', 'created user "' . $username . '" (role=' . $role . ')');
     } catch (Throwable $e) {
         header('Location: ?action=settings&user_err=' . urlencode('Username already exists.')); exit;
     }
@@ -895,6 +922,7 @@ function handleUserCreate(): never {
 function handleUserDelete(): never {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
     verifyCsrf();
+    requireOwnerRedirect();
     $id = (int)($_POST['id'] ?? 0);
     if ($id < 1) { header('Location: ?action=settings'); exit; }
     $me = currentUser();
@@ -905,14 +933,79 @@ function handleUserDelete(): never {
     if ($count <= 1) {
         header('Location: ?action=settings&user_err=' . urlencode('Cannot delete the last user.')); exit;
     }
-    $g = db()->prepare('SELECT username FROM users WHERE id=:id');
+    $g = db()->prepare('SELECT username, role FROM users WHERE id=:id');
     $g->bindValue(':id', $id, SQLITE3_INTEGER);
     $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
     if (!$row) { header('Location: ?action=settings'); exit; }
+    if ($row['role'] === 'owner') {
+        $owners = (int)db()->querySingle("SELECT COUNT(*) FROM users WHERE role='owner'");
+        if ($owners <= 1) {
+            header('Location: ?action=settings&user_err=' . urlencode('Cannot delete the last owner.')); exit;
+        }
+    }
     $s = db()->prepare('DELETE FROM users WHERE id=:id');
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
     $s->execute();
     audit('user.delete', 'deleted user "' . $row['username'] . '"');
+    header('Location: ?action=settings&user_ok=1#users'); exit;
+}
+
+function handleUserUpdate(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
+    verifyCsrf();
+    requireOwnerRedirect();
+    $id = (int)($_POST['id'] ?? 0);
+    $username = trim((string)($_POST['username'] ?? ''));
+    $role = ($_POST['role'] ?? 'admin') === 'owner' ? 'owner' : 'admin';
+    if ($id < 1 || $username === '') { header('Location: ?action=settings'); exit; }
+    if (!preg_match('/^[A-Za-z0-9._-]{2,32}$/', $username)) {
+        header('Location: ?action=settings&user_err=' . urlencode('Username must be 2-32 chars, letters/digits/._- only.')); exit;
+    }
+    $g = db()->prepare('SELECT username, role FROM users WHERE id=:id');
+    $g->bindValue(':id', $id, SQLITE3_INTEGER);
+    $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$row) { header('Location: ?action=settings'); exit; }
+    // Prevent demoting the last owner
+    if ($row['role'] === 'owner' && $role !== 'owner') {
+        $owners = (int)db()->querySingle("SELECT COUNT(*) FROM users WHERE role='owner'");
+        if ($owners <= 1) {
+            header('Location: ?action=settings&user_err=' . urlencode('Cannot demote the last owner.')); exit;
+        }
+    }
+    try {
+        $s = db()->prepare('UPDATE users SET username=:u, role=:r WHERE id=:id');
+        $s->bindValue(':u', $username, SQLITE3_TEXT);
+        $s->bindValue(':r', $role, SQLITE3_TEXT);
+        $s->bindValue(':id', $id, SQLITE3_INTEGER);
+        $s->execute();
+    } catch (Throwable $e) {
+        header('Location: ?action=settings&user_err=' . urlencode('Username already exists.')); exit;
+    }
+    $changes = [];
+    if ($row['username'] !== $username) $changes[] = 'rename "' . $row['username'] . '"→"' . $username . '"';
+    if ($row['role'] !== $role) $changes[] = 'role ' . $row['role'] . '→' . $role;
+    if ($changes) audit('user.update', implode(', ', $changes));
+    header('Location: ?action=settings&user_ok=1#users'); exit;
+}
+
+function handleUserResetPassword(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
+    verifyCsrf();
+    requireOwnerRedirect();
+    $id = (int)($_POST['id'] ?? 0);
+    $new = (string)($_POST['new_password'] ?? '');
+    if ($id < 1 || strlen($new) < 6) {
+        header('Location: ?action=settings&user_err=' . urlencode('New password must be at least 6 characters.')); exit;
+    }
+    $g = db()->prepare('SELECT username FROM users WHERE id=:id');
+    $g->bindValue(':id', $id, SQLITE3_INTEGER);
+    $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$row) { header('Location: ?action=settings'); exit; }
+    $u = db()->prepare('UPDATE users SET password_hash=:h WHERE id=:id');
+    $u->bindValue(':h', password_hash($new, PASSWORD_BCRYPT), SQLITE3_TEXT);
+    $u->bindValue(':id', $id, SQLITE3_INTEGER);
+    $u->execute();
+    audit('user.password_reset', 'reset password for "' . $row['username'] . '"');
     header('Location: ?action=settings&user_ok=1#users'); exit;
 }
 
@@ -1524,29 +1617,44 @@ function showSettings(): never {
         $ru = db()->query('SELECT id, username, role, created_at, last_login_at FROM users ORDER BY username');
         while ($row = $ru->fetchArray(SQLITE3_ASSOC)) $usersList[] = $row;
         $me = currentUser();
+        $isOwner = currentUserIsOwner();
         $userErr = $_GET['user_err'] ?? '';
         $userOk = isset($_GET['user_ok']);
         ?>
+        <style>
+        .role-badge{display:inline-block;padding:.1rem .45rem;border-radius:10px;font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+        .role-owner{background:color-mix(in srgb,var(--amber) 25%,transparent);color:var(--amber);border:1px solid color-mix(in srgb,var(--amber) 50%,transparent)}
+        .role-admin{background:color-mix(in srgb,var(--muted) 18%,transparent);color:var(--muted);border:1px solid color-mix(in srgb,var(--muted) 35%,transparent)}
+        .user-edit-form{display:none;background:color-mix(in srgb,var(--card) 90%,transparent);padding:.5rem .75rem;border-radius:6px;margin-top:.4rem;border:1px dashed var(--card-border)}
+        .user-edit-form.open{display:block}
+        .user-edit-form .row{display:flex;gap:.4rem;flex-wrap:wrap;margin-top:.3rem;align-items:center}
+        .user-edit-form input,.user-edit-form select{padding:.3rem .5rem;border:1px solid var(--input-border);border-radius:4px;font-size:.78rem;background:var(--input-bg);color:var(--text)}
+        </style>
         <fieldset id="users" style="margin-top:1.5rem">
-            <legend>Users (<?=count($usersList)?>)</legend>
+            <legend>Users (<?=count($usersList)?>)<?php if ($isOwner): ?> <span class="role-badge role-owner" style="margin-left:.4rem">owner view</span><?php endif; ?></legend>
             <?php if ($userErr): ?><div class="alert-warn"><?=e($userErr)?></div><?php endif; ?>
             <?php if ($userOk): ?><div class="alert-ok">Saved.</div><?php endif; ?>
+            <?php if (!$isOwner): ?>
+                <p style="font-size:.78rem;color:var(--muted);margin-bottom:.5rem">Only the <strong>owner</strong> can add, edit, or remove users. You can change your own password below.</p>
+            <?php endif; ?>
             <table style="width:100%;font-size:.82rem;border-collapse:collapse;margin-top:.25rem">
                 <thead><tr>
                     <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Username</th>
                     <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Role</th>
                     <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Created</th>
                     <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Last Login</th>
-                    <th style="padding:.3rem .5rem;border-bottom:1px solid var(--card-border)"></th>
+                    <?php if ($isOwner): ?><th style="padding:.3rem .5rem;border-bottom:1px solid var(--card-border)"></th><?php endif; ?>
                 </tr></thead>
                 <tbody>
-                <?php foreach ($usersList as $u): $isMe = $me && (int)$me['id'] === (int)$u['id']; ?>
+                <?php foreach ($usersList as $u): $isMe = $me && (int)$me['id'] === (int)$u['id']; $rcls = $u['role'] === 'owner' ? 'role-owner' : 'role-admin'; ?>
                     <tr>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($u['username'])?></strong><?php if ($isMe): ?> <span style="color:var(--muted);font-size:.7rem">(you)</span><?php endif; ?></td>
-                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted)"><?=e($u['role'])?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><span class="role-badge <?=$rcls?>"><?=e($u['role'])?></span></td>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e(substr($u['created_at'] ?? '', 0, 10))?></td>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e($u['last_login_at'] ? str_replace('T',' ',substr($u['last_login_at'],0,16)) : '—')?></td>
-                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);text-align:right">
+                        <?php if ($isOwner): ?>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);text-align:right;white-space:nowrap">
+                            <button type="button" class="btn-sm" onclick="document.getElementById('uedit-<?=(int)$u['id']?>').classList.toggle('open')">Edit</button>
                             <?php if (!$isMe): ?>
                             <form method="post" action="?action=user-delete" style="display:inline" onsubmit="return confirm('Delete user <?=e($u['username'])?>?')">
                                 <?=csrfField()?>
@@ -1555,11 +1663,42 @@ function showSettings(): never {
                             </form>
                             <?php endif; ?>
                         </td>
+                        <?php endif; ?>
                     </tr>
+                    <?php if ($isOwner): ?>
+                    <tr><td colspan="5" style="padding:0">
+                        <div id="uedit-<?=(int)$u['id']?>" class="user-edit-form">
+                            <strong style="font-size:.78rem">Edit "<?=e($u['username'])?>"</strong>
+                            <form method="post" action="?action=user-update" class="row">
+                                <?=csrfField()?>
+                                <input type="hidden" name="id" value="<?=(int)$u['id']?>">
+                                <label style="font-size:.7rem;color:var(--muted)">Username
+                                    <input type="text" name="username" value="<?=e($u['username'])?>" pattern="[A-Za-z0-9._\-]{2,32}" required>
+                                </label>
+                                <label style="font-size:.7rem;color:var(--muted)">Role
+                                    <select name="role">
+                                        <option value="admin" <?=$u['role']==='admin'?'selected':''?>>admin</option>
+                                        <option value="owner" <?=$u['role']==='owner'?'selected':''?>>owner</option>
+                                    </select>
+                                </label>
+                                <button type="submit" class="btn-sm">Save</button>
+                            </form>
+                            <form method="post" action="?action=user-reset-password" class="row" onsubmit="return confirm('Reset password for <?=e($u['username'])?>?')">
+                                <?=csrfField()?>
+                                <input type="hidden" name="id" value="<?=(int)$u['id']?>">
+                                <label style="font-size:.7rem;color:var(--muted)">New password
+                                    <input type="password" name="new_password" minlength="6" autocomplete="new-password" required>
+                                </label>
+                                <button type="submit" class="btn-sm btn-sm-danger">Reset Password</button>
+                            </form>
+                        </div>
+                    </td></tr>
+                    <?php endif; ?>
                 <?php endforeach; ?>
                 </tbody>
             </table>
 
+            <?php if ($isOwner): ?>
             <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
                 <strong style="font-size:.82rem">Add User</strong>
                 <form method="post" action="?action=user-create" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-top:.5rem">
@@ -1570,9 +1709,16 @@ function showSettings(): never {
                     <label style="flex:1;min-width:140px">Password
                         <input type="password" name="password" minlength="6" autocomplete="new-password" required>
                     </label>
+                    <label style="min-width:100px">Role
+                        <select name="role">
+                            <option value="admin">admin</option>
+                            <option value="owner">owner</option>
+                        </select>
+                    </label>
                     <button type="submit" class="btn-sm">Create</button>
                 </form>
             </div>
+            <?php endif; ?>
 
             <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
                 <strong style="font-size:.82rem">Change My Password (<?=e($me['username'] ?? '')?>)</strong>
