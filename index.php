@@ -94,8 +94,10 @@ function db(): SQLite3 {
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT \'admin\',
         created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
-        last_login_at TEXT
+        last_login_at TEXT,
+        must_change_password INTEGER NOT NULL DEFAULT 0
     )');
+    @$i->exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0');
     @$i->exec('CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -437,7 +439,7 @@ function isLoggedIn(): bool {
 
 function currentUser(): ?array {
     if (empty($_SESSION['sermony_user_id'])) return null;
-    $s = db()->prepare('SELECT id, username, role, created_at, last_login_at FROM users WHERE id=:id');
+    $s = db()->prepare('SELECT id, username, role, created_at, last_login_at, must_change_password FROM users WHERE id=:id');
     $s->bindValue(':id', (int)$_SESSION['sermony_user_id'], SQLITE3_INTEGER);
     $r = $s->execute()->fetchArray(SQLITE3_ASSOC);
     return $r ?: null;
@@ -560,6 +562,13 @@ if ($userCount === 0) {
 
 // All remaining routes require login
 requireAuth();
+
+// Force password change if flagged (e.g. fresh user, admin reset)
+$me = currentUser();
+if ($me && !empty($me['must_change_password']) && !in_array($action, ['force-change-password', 'logout'], true)) {
+    header('Location: ?action=force-change-password'); exit;
+}
+if ($action === 'force-change-password') { handleForceChangePassword(); }
 
 match ($action) {
     'delete'         => handleDelete(),
@@ -905,14 +914,17 @@ function handleUserCreate(): never {
     if (!preg_match('/^[A-Za-z0-9._-]{2,32}$/', $username)) {
         header('Location: ?action=settings&user_err=' . urlencode('Username must be 2-32 chars, letters/digits/._- only.')); exit;
     }
+    $forceChange = !empty($_POST['must_change_password']) ? 1 : 0;
     try {
-        $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, :r)');
+        $s = db()->prepare('INSERT INTO users (username, password_hash, role, must_change_password) VALUES (:u, :h, :r, :m)');
         $s->bindValue(':u', $username, SQLITE3_TEXT);
         $s->bindValue(':h', password_hash($pw, PASSWORD_BCRYPT), SQLITE3_TEXT);
         $s->bindValue(':r', $role, SQLITE3_TEXT);
+        $s->bindValue(':m', $forceChange, SQLITE3_INTEGER);
         $s->execute();
         $newId = (int)db()->lastInsertRowID();
-        audit('user.create', 'created user "' . $username . '" (role=' . $role . ')');
+        $extra = $forceChange ? ', must change pw' : '';
+        audit('user.create', 'created user "' . $username . '" (role=' . $role . $extra . ')');
     } catch (Throwable $e) {
         header('Location: ?action=settings&user_err=' . urlencode('Username already exists.')); exit;
     }
@@ -1001,11 +1013,13 @@ function handleUserResetPassword(): never {
     $g->bindValue(':id', $id, SQLITE3_INTEGER);
     $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
     if (!$row) { header('Location: ?action=settings'); exit; }
-    $u = db()->prepare('UPDATE users SET password_hash=:h WHERE id=:id');
+    $forceChange = !empty($_POST['must_change_password']) ? 1 : 0;
+    $u = db()->prepare('UPDATE users SET password_hash=:h, must_change_password=:m WHERE id=:id');
     $u->bindValue(':h', password_hash($new, PASSWORD_BCRYPT), SQLITE3_TEXT);
+    $u->bindValue(':m', $forceChange, SQLITE3_INTEGER);
     $u->bindValue(':id', $id, SQLITE3_INTEGER);
     $u->execute();
-    audit('user.password_reset', 'reset password for "' . $row['username'] . '"');
+    audit('user.password_reset', 'reset password for "' . $row['username'] . '"' . ($forceChange ? ' (must change on next login)' : ''));
     header('Location: ?action=settings&user_ok=1#users'); exit;
 }
 
@@ -1029,12 +1043,64 @@ function handleUserPassword(): never {
     if (!$row || !password_verify($current, $row['password_hash'])) {
         header('Location: ?action=settings&user_err=' . urlencode('Current password is incorrect.')); exit;
     }
-    $u = db()->prepare('UPDATE users SET password_hash=:h WHERE id=:id');
+    $u = db()->prepare('UPDATE users SET password_hash=:h, must_change_password=0 WHERE id=:id');
     $u->bindValue(':h', password_hash($new, PASSWORD_BCRYPT), SQLITE3_TEXT);
     $u->bindValue(':id', (int)$me['id'], SQLITE3_INTEGER);
     $u->execute();
     audit('user.password_change', 'self');
     header('Location: ?action=settings&user_ok=1#users'); exit;
+}
+
+function handleForceChangePassword(): never {
+    $me = currentUser();
+    if (!$me) { header('Location: ?action=login'); exit; }
+    if (empty($me['must_change_password'])) { header('Location: ?'); exit; }
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { showForceChangePassword(); exit; }
+    verifyCsrf();
+    $new = (string)($_POST['new_password'] ?? '');
+    $new2 = (string)($_POST['new_password_confirm'] ?? '');
+    if (strlen($new) < 6) { showForceChangePassword('Password must be at least 6 characters.'); exit; }
+    if ($new !== $new2) { showForceChangePassword('Passwords do not match.'); exit; }
+
+    // Don't let them reuse the same password — they were given this one by an admin
+    $g = db()->prepare('SELECT password_hash FROM users WHERE id=:id');
+    $g->bindValue(':id', (int)$me['id'], SQLITE3_INTEGER);
+    $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
+    if ($row && password_verify($new, $row['password_hash'])) {
+        showForceChangePassword('New password must be different from the current one.'); exit;
+    }
+
+    $u = db()->prepare('UPDATE users SET password_hash=:h, must_change_password=0 WHERE id=:id');
+    $u->bindValue(':h', password_hash($new, PASSWORD_BCRYPT), SQLITE3_TEXT);
+    $u->bindValue(':id', (int)$me['id'], SQLITE3_INTEGER);
+    $u->execute();
+    audit('user.password_change', 'forced');
+    header('Location: ?'); exit;
+}
+
+function showForceChangePassword(string $error = ''): never {
+    $me = currentUser();
+    pageTop('Change Password');
+    ?>
+    <div class="auth-box">
+        <h2>Change Your Password</h2>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">You must set a new password before continuing. Hello <strong><?=e($me['username'] ?? '')?></strong>.</p>
+        <?php if ($error): ?><div class="alert-warn"><?=e($error)?></div><?php endif; ?>
+        <form method="post" action="?action=force-change-password">
+            <?=csrfField()?>
+            <label>New Password
+                <input type="password" name="new_password" minlength="6" autocomplete="new-password" autofocus required>
+            </label>
+            <label>Confirm New Password
+                <input type="password" name="new_password_confirm" minlength="6" autocomplete="new-password" required>
+            </label>
+            <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Set New Password</button>
+        </form>
+        <p style="font-size:.75rem;color:var(--subtle);text-align:center;margin-top:1rem"><a href="?action=logout" style="color:var(--muted)">Sign out</a></p>
+    </div>
+    <?php
+    pageBottom(); exit;
 }
 
 function handleExportCsv(): never {
@@ -1648,7 +1714,7 @@ function showSettings(): never {
                 <tbody>
                 <?php foreach ($usersList as $u): $isMe = $me && (int)$me['id'] === (int)$u['id']; $rcls = $u['role'] === 'owner' ? 'role-owner' : 'role-admin'; ?>
                     <tr>
-                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($u['username'])?></strong><?php if ($isMe): ?> <span style="color:var(--muted);font-size:.7rem">(you)</span><?php endif; ?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($u['username'])?></strong><?php if ($isMe): ?> <span style="color:var(--muted);font-size:.7rem">(you)</span><?php endif; ?><?php if (!empty($u['must_change_password'])): ?> <span class="role-badge" style="background:color-mix(in srgb,var(--red) 20%,transparent);color:var(--red);border:1px solid color-mix(in srgb,var(--red) 50%,transparent);margin-left:.3rem">must change pw</span><?php endif; ?></td>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><span class="role-badge <?=$rcls?>"><?=e($u['role'])?></span></td>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e(substr($u['created_at'] ?? '', 0, 10))?></td>
                         <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e($u['last_login_at'] ? str_replace('T',' ',substr($u['last_login_at'],0,16)) : '—')?></td>
@@ -1689,6 +1755,10 @@ function showSettings(): never {
                                 <label style="font-size:.7rem;color:var(--muted)">New password
                                     <input type="password" name="new_password" minlength="6" autocomplete="new-password" required>
                                 </label>
+                                <label style="display:flex;align-items:center;gap:.3rem;font-size:.7rem;color:var(--muted)">
+                                    <input type="checkbox" name="must_change_password" value="1" checked>
+                                    must change on next login
+                                </label>
                                 <button type="submit" class="btn-sm btn-sm-danger">Reset Password</button>
                             </form>
                         </div>
@@ -1701,21 +1771,27 @@ function showSettings(): never {
             <?php if ($isOwner): ?>
             <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
                 <strong style="font-size:.82rem">Add User</strong>
-                <form method="post" action="?action=user-create" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-top:.5rem">
+                <form method="post" action="?action=user-create" style="margin-top:.5rem">
                     <?=csrfField()?>
-                    <label style="flex:1;min-width:140px">Username
-                        <input type="text" name="username" autocomplete="off" required pattern="[A-Za-z0-9._\-]{2,32}">
+                    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
+                        <label style="flex:1;min-width:140px">Username
+                            <input type="text" name="username" autocomplete="off" required pattern="[A-Za-z0-9._\-]{2,32}">
+                        </label>
+                        <label style="flex:1;min-width:140px">Password
+                            <input type="password" name="password" minlength="6" autocomplete="new-password" required>
+                        </label>
+                        <label style="min-width:100px">Role
+                            <select name="role">
+                                <option value="admin">admin</option>
+                                <option value="owner">owner</option>
+                            </select>
+                        </label>
+                        <button type="submit" class="btn-sm">Create</button>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:.4rem;font-size:.75rem;color:var(--muted);margin-top:.4rem">
+                        <input type="checkbox" name="must_change_password" value="1" checked>
+                        Force user to change password on first login
                     </label>
-                    <label style="flex:1;min-width:140px">Password
-                        <input type="password" name="password" minlength="6" autocomplete="new-password" required>
-                    </label>
-                    <label style="min-width:100px">Role
-                        <select name="role">
-                            <option value="admin">admin</option>
-                            <option value="owner">owner</option>
-                        </select>
-                    </label>
-                    <button type="submit" class="btn-sm">Create</button>
                 </form>
             </div>
             <?php endif; ?>
