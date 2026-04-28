@@ -85,6 +85,12 @@ return [
                 jsonOut(['entries' => $all]);
             }
 
+            if ($action === 'vault-sample') {
+                vaultDb();
+                $r = db()->querySingle('SELECT encrypted FROM vault LIMIT 1', true);
+                jsonOut(['encrypted' => $r['encrypted'] ?? null]);
+            }
+
             if ($action === 'vault-bulk-save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $in = json_decode(file_get_contents('php://input'), true);
                 if (!$in) jsonErr('Invalid JSON');
@@ -203,23 +209,35 @@ return [
                 window.vaultUnlock=async function(){
                     var pw=document.getElementById('vaultKeyInput').value;
                     if(!pw)return;
-                    cryptoKey=await deriveKey(pw);
-                    sessionStorage.setItem(VAULT_KEY_STORAGE,pw);
-                    // Try loading existing data
+                    var key=await deriveKey(pw);
                     var resp=await fetch('?action=vault-get&id='+serverId);
                     var data=await resp.json();
                     if(data.has_data&&data.encrypted){
-                        var dec=await decrypt(data.encrypted,cryptoKey);
-                        if(dec){
-                            document.getElementById('vaultUser').value=dec.username||'';
-                            document.getElementById('vaultPass').value=dec.password||'';
-                            document.getElementById('vaultKey').value=dec.ssh_key||'';
-                            document.getElementById('vaultNotes').value=dec.notes||'';
-                        }else{
+                        var dec=await decrypt(data.encrypted,key);
+                        if(!dec){
                             alert('Wrong vault key — cannot decrypt stored credentials.');
-                            cryptoKey=null;sessionStorage.removeItem(VAULT_KEY_STORAGE);return;
+                            sessionStorage.removeItem(VAULT_KEY_STORAGE);return;
                         }
+                        document.getElementById('vaultUser').value=dec.username||'';
+                        document.getElementById('vaultPass').value=dec.password||'';
+                        document.getElementById('vaultKey').value=dec.ssh_key||'';
+                        document.getElementById('vaultNotes').value=dec.notes||'';
+                    }else{
+                        // No data on this server — validate the key against any existing blob
+                        // so we don't silently encrypt with a wrong/mismatched team key.
+                        var sampleResp=await fetch('?action=vault-sample');
+                        var sample=await sampleResp.json();
+                        if(sample.encrypted){
+                            var test=await decrypt(sample.encrypted,key);
+                            if(!test){
+                                alert('Wrong vault key — does not match the team key already in use.');
+                                sessionStorage.removeItem(VAULT_KEY_STORAGE);return;
+                            }
+                        }
+                        // else: vault is empty everywhere — first entry, accept the key.
                     }
+                    cryptoKey=key;
+                    sessionStorage.setItem(VAULT_KEY_STORAGE,pw);
                     document.getElementById('vaultLocked').style.display='none';
                     document.getElementById('vaultUnlocked').style.display='';
                     document.getElementById('vaultStatus').textContent='Unlocked';

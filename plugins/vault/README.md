@@ -68,15 +68,16 @@ Click **Lock** to clear credentials from the page. The vault key stays in sessio
 
 ## Changing the Vault Key
 
-There's no "change key" operation. To re-key:
+Go to **Settings → Credential Vault → Change Vault Key**. Enter the current key and the new key (twice). The browser:
 
-1. Unlock with the old key
-2. Copy credentials somewhere safe
-3. Delete the stored credentials
-4. Lock, then unlock with your new key
-5. Re-enter and save credentials
+1. Fetches every encrypted blob via `vault-all`
+2. Decrypts each one with the old key
+3. Re-encrypts each one with the new key
+4. Bulk-writes them back via `vault-bulk-save`
 
-This re-encrypts everything with the new key.
+If some entries can't be decrypted (e.g. they were encrypted with a different key in the past), you'll be prompted whether to save the ones that worked. Your sessionStorage key is updated to the new key on success.
+
+The server never sees either key — the entire re-encryption happens in your browser.
 
 ## Technical Details
 
