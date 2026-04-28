@@ -95,6 +95,34 @@ return [
                 jsonOut(['ok' => true]);
             }
 
+            // ── Vault rekey support ──────────────────────
+            if ($action === 'api-keys-all') {
+                $res = $d->query('SELECT id, encrypted_key FROM api_keys WHERE encrypted_key != ""');
+                $rows = [];
+                while ($r = $res->fetchArray(SQLITE3_ASSOC)) $rows[] = $r;
+                jsonOut(['entries' => $rows]);
+            }
+
+            if ($action === 'api-keys-bulk-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+                if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
+                $in = json_decode(file_get_contents('php://input'), true);
+                $count = 0;
+                $s = $d->prepare('UPDATE api_keys SET encrypted_key=:ek, updated_at=strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\') WHERE id=:id');
+                foreach ($in['entries'] ?? [] as $entry) {
+                    $id = (int)($entry['id'] ?? 0);
+                    $ek = (string)($entry['encrypted_key'] ?? '');
+                    if ($id > 0 && $ek !== '') {
+                        $s->bindValue(':id', $id, SQLITE3_INTEGER);
+                        $s->bindValue(':ek', $ek, SQLITE3_TEXT);
+                        $s->execute();
+                        $s->reset();
+                        $count++;
+                    }
+                }
+                jsonOut(['ok' => true, 'updated' => $count]);
+            }
+
             // ── Main page ────────────────────────────────
             if ($action === 'api-keys') {
                 // Get server list for the dropdown

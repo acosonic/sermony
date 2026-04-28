@@ -91,6 +91,28 @@ return [
                 jsonOut(['encrypted' => $r['encrypted'] ?? null]);
             }
 
+            if ($action === 'vault-rekey-stats') {
+                vaultDb();
+                $vault = (int)db()->querySingle('SELECT COUNT(*) FROM vault');
+                $apiKeys = 0; $subs = 0;
+                try { $apiKeys = (int)db()->querySingle('SELECT COUNT(*) FROM api_keys WHERE encrypted_key != ""'); } catch (Throwable $e) {}
+                try { $subs = (int)db()->querySingle('SELECT COUNT(*) FROM subscriptions WHERE encrypted_password != ""'); } catch (Throwable $e) {}
+                jsonOut(['vault' => $vault, 'api_keys' => $apiKeys, 'subscriptions' => $subs]);
+            }
+
+            if ($action === 'vault-audit-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+                if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
+                $in = json_decode(file_get_contents('php://input'), true) ?: [];
+                $v = (int)($in['vault'] ?? 0);
+                $a = (int)($in['api_keys'] ?? 0);
+                $s = (int)($in['subscriptions'] ?? 0);
+                $f = (int)($in['failed'] ?? 0);
+                $details = "vault=$v, api_keys=$a, subscriptions=$s" . ($f > 0 ? ", failed=$f" : '');
+                if (function_exists('audit')) audit('vault.rekey', $details);
+                jsonOut(['ok' => true]);
+            }
+
             if ($action === 'vault-bulk-save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $in = json_decode(file_get_contents('php://input'), true);
                 if (!$in) jsonErr('Invalid JSON');
@@ -363,6 +385,20 @@ return [
                     return btoa(String.fromCharCode.apply(null,buf));
                 }
 
+                // Encrypt a plain string (used for api_keys/subscriptions blobs)
+                async function encryptStr(text,key){
+                    if(!text)return '';
+                    var iv=crypto.getRandomValues(new Uint8Array(12));
+                    var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},key,new TextEncoder().encode(text));
+                    var buf=new Uint8Array(iv.length+ct.byteLength);buf.set(iv);buf.set(new Uint8Array(ct),iv.length);
+                    return btoa(String.fromCharCode.apply(null,buf));
+                }
+                async function decryptStr(b64,key){
+                    var raw=Uint8Array.from(atob(b64),function(c){return c.charCodeAt(0)});
+                    var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:raw.slice(0,12)},key,raw.slice(12));
+                    return new TextDecoder().decode(pt);
+                }
+
                 window.vaultRekey=async function(){
                     var oldPw=document.getElementById('vaultOldKey').value;
                     var newPw=document.getElementById('vaultNewKey').value;
@@ -371,39 +407,96 @@ return [
                     if(newPw!==newPw2){alert('New keys do not match.');return}
                     if(newPw.length<4){alert('New key too short (min 4 chars).');return}
 
+                    // Show counts and confirm before doing anything destructive
+                    var statsResp=await fetch('?action=vault-rekey-stats');
+                    var stats=await statsResp.json();
+                    var total=(stats.vault||0)+(stats.api_keys||0)+(stats.subscriptions||0);
+                    if(total===0){alert('No encrypted data found anywhere — nothing to rekey.');return}
+                    var msg='Re-encrypt all encrypted data with the new vault key?\n\n'+
+                            '  • '+stats.vault+' server credential entries\n'+
+                            '  • '+stats.api_keys+' API keys\n'+
+                            '  • '+stats.subscriptions+' subscription passwords\n\n'+
+                            'Anything that fails to decrypt with the OLD key will be skipped.';
+                    if(!confirm(msg))return;
+
                     var oldKey=await deriveKey(oldPw);
                     var newKey=await deriveKey(newPw);
 
-                    // Fetch all encrypted entries
-                    var resp=await fetch('?action=vault-all');
-                    var data=await resp.json();
-                    if(!data.entries||!data.entries.length){alert('No credentials stored.');return}
+                    var totalFailed=0;
+                    var totalOk={vault:0,api_keys:0,subscriptions:0};
 
-                    // Decrypt with old, re-encrypt with new
-                    var reEncrypted=[];
-                    var failed=0;
-                    for(var e of data.entries){
-                        try{
-                            var plain=await decrypt(e.encrypted,oldKey);
-                            var enc=await encrypt(plain,newKey);
-                            reEncrypted.push({server_id:e.server_id,encrypted:enc});
-                        }catch(err){failed++;console.error('Failed to re-key server',e.server_id,err)}
+                    // 1. vault — JSON-encoded credential objects
+                    if(stats.vault>0){
+                        var vAll=await(await fetch('?action=vault-all')).json();
+                        var vOut=[];
+                        for(var e of (vAll.entries||[])){
+                            try{
+                                var plain=await decrypt(e.encrypted,oldKey);
+                                if(plain===null)throw new Error('decrypt returned null');
+                                var enc=await encrypt(plain,newKey);
+                                vOut.push({server_id:e.server_id,encrypted:enc});
+                            }catch(err){totalFailed++;console.error('vault rekey failed for server',e.server_id,err)}
+                        }
+                        if(vOut.length>0){
+                            await fetch('?action=vault-bulk-save',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({entries:vOut})});
+                            totalOk.vault=vOut.length;
+                        }
                     }
 
-                    if(failed>0&&!confirm(failed+' entries could not be decrypted (wrong old key?). Save the '+reEncrypted.length+' that worked?'))return;
-                    if(reEncrypted.length===0){alert('Could not decrypt any entries. Wrong old key?');return}
+                    // 2. api_keys — single-string blobs
+                    if(stats.api_keys>0){
+                        var akAll=await(await fetch('?action=api-keys-all')).json();
+                        var akOut=[];
+                        for(var e of (akAll.entries||[])){
+                            try{
+                                var plain=await decryptStr(e.encrypted_key,oldKey);
+                                var enc=await encryptStr(plain,newKey);
+                                akOut.push({id:e.id,encrypted_key:enc});
+                            }catch(err){totalFailed++;console.error('api-keys rekey failed for id',e.id,err)}
+                        }
+                        if(akOut.length>0){
+                            var rs=await(await fetch('?action=api-keys-bulk-rekey',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({entries:akOut})})).json();
+                            totalOk.api_keys=rs.updated||akOut.length;
+                        }
+                    }
 
-                    // Bulk save
-                    var saveResp=await fetch('?action=vault-bulk-save',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({entries:reEncrypted})});
-                    var r=await saveResp.json();
-                    if(r.ok){
-                        sessionStorage.setItem(KEY,newPw);
-                        alert('Vault key changed! '+reEncrypted.length+' credentials re-encrypted.'+(failed?' '+failed+' failed.':''));
-                        document.getElementById('settingsVaultKey').value=newPw;
-                        document.getElementById('vaultOldKey').value='';
-                        document.getElementById('vaultNewKey').value='';
-                        document.getElementById('vaultNewKey2').value='';
-                    }else{alert('Save failed: '+(r.error||'unknown'))}
+                    // 3. subscriptions — single-string blobs
+                    if(stats.subscriptions>0){
+                        var sbAll=await(await fetch('?action=subscriptions-all')).json();
+                        var sbOut=[];
+                        for(var e of (sbAll.entries||[])){
+                            try{
+                                var plain=await decryptStr(e.encrypted_password,oldKey);
+                                var enc=await encryptStr(plain,newKey);
+                                sbOut.push({id:e.id,encrypted_password:enc});
+                            }catch(err){totalFailed++;console.error('subscriptions rekey failed for id',e.id,err)}
+                        }
+                        if(sbOut.length>0){
+                            var rs=await(await fetch('?action=subscriptions-bulk-rekey',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({entries:sbOut})})).json();
+                            totalOk.subscriptions=rs.updated||sbOut.length;
+                        }
+                    }
+
+                    var totalReEncrypted=totalOk.vault+totalOk.api_keys+totalOk.subscriptions;
+                    if(totalReEncrypted===0){
+                        alert('Could not decrypt any entries. Wrong old key?');
+                        return;
+                    }
+
+                    // Update sessionStorage and audit log
+                    sessionStorage.setItem(KEY,newPw);
+                    await fetch('?action=vault-audit-rekey',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':window.CSRF},body:JSON.stringify({vault:totalOk.vault,api_keys:totalOk.api_keys,subscriptions:totalOk.subscriptions,failed:totalFailed})});
+
+                    var summary='Vault key changed.\n\n'+
+                                '  • '+totalOk.vault+' server credentials re-encrypted\n'+
+                                '  • '+totalOk.api_keys+' API keys re-encrypted\n'+
+                                '  • '+totalOk.subscriptions+' subscriptions re-encrypted'+
+                                (totalFailed?'\n\n'+totalFailed+' entries failed (could not decrypt with old key).':'');
+                    alert(summary);
+                    document.getElementById('settingsVaultKey').value=newPw;
+                    document.getElementById('vaultOldKey').value='';
+                    document.getElementById('vaultNewKey').value='';
+                    document.getElementById('vaultNewKey2').value='';
                 };
             })();
             </script>

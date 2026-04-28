@@ -128,6 +128,34 @@ return [
                 jsonOut(['ok' => true]);
             }
 
+            // ── Vault rekey support ──────────────────────
+            if ($action === 'subscriptions-all') {
+                $res = $d->query('SELECT id, encrypted_password FROM subscriptions WHERE encrypted_password != ""');
+                $rows = [];
+                while ($r = $res->fetchArray(SQLITE3_ASSOC)) $rows[] = $r;
+                jsonOut(['entries' => $rows]);
+            }
+
+            if ($action === 'subscriptions-bulk-rekey' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+                $hdr = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+                if (!$hdr || !hash_equals(csrfToken(), $hdr)) jsonErr('Invalid CSRF', 403);
+                $in = json_decode(file_get_contents('php://input'), true);
+                $count = 0;
+                $s = $d->prepare('UPDATE subscriptions SET encrypted_password=:ep, updated_at=strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\') WHERE id=:id');
+                foreach ($in['entries'] ?? [] as $entry) {
+                    $id = (int)($entry['id'] ?? 0);
+                    $ep = (string)($entry['encrypted_password'] ?? '');
+                    if ($id > 0 && $ep !== '') {
+                        $s->bindValue(':id', $id, SQLITE3_INTEGER);
+                        $s->bindValue(':ep', $ep, SQLITE3_TEXT);
+                        $s->execute();
+                        $s->reset();
+                        $count++;
+                    }
+                }
+                jsonOut(['ok' => true, 'updated' => $count]);
+            }
+
             // ── Main page ──────────────────────────────────
 
             if ($action === 'subscriptions') {

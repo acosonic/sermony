@@ -68,16 +68,18 @@ Click **Lock** to clear credentials from the page. The vault key stays in sessio
 
 ## Changing the Vault Key
 
-Go to **Settings → Credential Vault → Change Vault Key**. Enter the current key and the new key (twice). The browser:
+Go to **Settings → Credential Vault → Change Vault Key**. Enter the current key and the new key (twice).
 
-1. Fetches every encrypted blob via `vault-all`
-2. Decrypts each one with the old key
-3. Re-encrypts each one with the new key
-4. Bulk-writes them back via `vault-bulk-save`
+Because the same vault key is shared across the **Credential Vault**, **API Keys**, and **Subscriptions** plugins, the rekey re-encrypts data in all three:
 
-If some entries can't be decrypted (e.g. they were encrypted with a different key in the past), you'll be prompted whether to save the ones that worked. Your sessionStorage key is updated to the new key on success.
+1. Browser fetches counts of each (`vault-rekey-stats`) and shows a confirmation with the totals.
+2. On confirm, browser fetches every encrypted blob from each plugin (`vault-all`, `api-keys-all`, `subscriptions-all`).
+3. Decrypts each with the old key and re-encrypts with the new key.
+4. Bulk-saves back via `vault-bulk-save`, `api-keys-bulk-rekey`, `subscriptions-bulk-rekey`.
+5. Updates your sessionStorage to the new key.
+6. Writes a `vault.rekey` entry to the audit log with the per-plugin counts.
 
-The server never sees either key — the entire re-encryption happens in your browser.
+Entries that fail to decrypt with the old key are skipped and reported in the summary. The server never sees either key — the entire re-encryption happens in your browser.
 
 ## Technical Details
 

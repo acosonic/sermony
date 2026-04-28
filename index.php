@@ -88,6 +88,36 @@ function db(): SQLite3 {
         success INTEGER NOT NULL DEFAULT 0,
         attempted_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\'))
     )');
+    @$i->exec('CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT \'admin\',
+        created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\')),
+        last_login_at TEXT
+    )');
+    @$i->exec('CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        username TEXT,
+        action TEXT NOT NULL,
+        details TEXT,
+        ip TEXT,
+        created_at TEXT NOT NULL DEFAULT (strftime(\'%Y-%m-%dT%H:%M:%SZ\',\'now\'))
+    )');
+    @$i->exec('CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC)');
+    // Migrate legacy single-password setting into the users table
+    $userCount = (int)$i->querySingle('SELECT COUNT(*) FROM users');
+    if ($userCount === 0) {
+        $legacyRow = $i->querySingle('SELECT value FROM settings WHERE key=\'admin_password_hash\'', true);
+        $legacyHash = $legacyRow['value'] ?? '';
+        if ($legacyHash !== '') {
+            $st = $i->prepare('INSERT INTO users (username, password_hash, role) VALUES (\'admin\', :h, \'admin\')');
+            $st->bindValue(':h', $legacyHash, SQLITE3_TEXT);
+            $st->execute();
+            $i->exec('DELETE FROM settings WHERE key=\'admin_password_hash\'');
+        }
+    }
     // Block direct access to .db files
     $ht = dirname(DB_FILE) . '/.htaccess';
     if (!file_exists($ht)) {
@@ -389,7 +419,7 @@ session_set_cookie_params([
 session_start();
 
 function isLoggedIn(): bool {
-    if (empty($_SESSION['sermony_auth'])) return false;
+    if (empty($_SESSION['sermony_auth']) || empty($_SESSION['sermony_user_id'])) return false;
     // Session timeout
     if (isset($_SESSION['sermony_last_active']) && (time() - $_SESSION['sermony_last_active']) > SESSION_LIFETIME) {
         $_SESSION = [];
@@ -399,9 +429,32 @@ function isLoggedIn(): bool {
     return true;
 }
 
+function currentUser(): ?array {
+    if (empty($_SESSION['sermony_user_id'])) return null;
+    $s = db()->prepare('SELECT id, username, role, created_at, last_login_at FROM users WHERE id=:id');
+    $s->bindValue(':id', (int)$_SESSION['sermony_user_id'], SQLITE3_INTEGER);
+    $r = $s->execute()->fetchArray(SQLITE3_ASSOC);
+    return $r ?: null;
+}
+
+function audit(string $action, ?string $details = null, ?int $userId = null, ?string $username = null): void {
+    if ($userId === null) {
+        $u = currentUser();
+        $userId = $u['id'] ?? null;
+        $username = $u['username'] ?? null;
+    }
+    $s = db()->prepare('INSERT INTO audit_log (user_id, username, action, details, ip) VALUES (:uid, :un, :a, :d, :ip)');
+    if ($userId !== null) $s->bindValue(':uid', $userId, SQLITE3_INTEGER); else $s->bindValue(':uid', null, SQLITE3_NULL);
+    $s->bindValue(':un', $username, SQLITE3_TEXT);
+    $s->bindValue(':a', $action, SQLITE3_TEXT);
+    $s->bindValue(':d', $details, SQLITE3_TEXT);
+    $s->bindValue(':ip', clientIp(), SQLITE3_TEXT);
+    $s->execute();
+}
+
 function requireAuth(): void {
-    $pw = setting('admin_password_hash');
-    if (!$pw || $pw === '') return;
+    $userCount = (int)db()->querySingle('SELECT COUNT(*) FROM users');
+    if ($userCount === 0) return; // first-run: setup will be forced by router
     if (isLoggedIn()) return;
     showLogin(); exit;
 }
@@ -477,9 +530,9 @@ if ($action === 'login') { handleLogin(); }
 if ($action === 'logout') { handleLogout(); }
 if ($action === 'setup-password') { handleSetupPassword(); }
 
-// First-run: if no password set, force setup
-$pwHash = setting('admin_password_hash');
-if (!$pwHash || $pwHash === '') {
+// First-run: if no users exist, force setup
+$userCount = (int)db()->querySingle('SELECT COUNT(*) FROM users');
+if ($userCount === 0) {
     if ($action !== 'setup-password') { showSetupPassword(); exit; }
 }
 
@@ -491,6 +544,9 @@ match ($action) {
     'reorder'        => handleReorder(),
     'update-server'  => handleUpdateServer(),
     'rotate-agent-key' => handleRotateAgentKey(),
+    'user-create'    => handleUserCreate(),
+    'user-delete'    => handleUserDelete(),
+    'user-password'  => handleUserPassword(),
     'dashboard-json' => handleDashboardJson(),
     'export-csv'     => handleExportCsv(),
     'settings'       => ($_SERVER['REQUEST_METHOD'] === 'POST' ? handleSettings() : showSettings()),
@@ -509,20 +565,32 @@ function handleLogin(): never {
     if (isLoginLocked()) {
         showLogin('Too many failed attempts. Try again in ' . LOCKOUT_MINUTES . ' minutes.'); exit;
     }
+    $username = trim((string)($_POST['username'] ?? ''));
     $pw = $_POST['password'] ?? '';
-    $hash = setting('admin_password_hash');
-    if ($hash && password_verify($pw, $hash)) {
+    if ($username === '') $username = 'admin';
+    $s = db()->prepare('SELECT id, username, password_hash FROM users WHERE username=:u');
+    $s->bindValue(':u', $username, SQLITE3_TEXT);
+    $row = $s->execute()->fetchArray(SQLITE3_ASSOC);
+    if ($row && password_verify($pw, $row['password_hash'])) {
         logLoginAttempt(true);
         session_regenerate_id(true);
         $_SESSION['sermony_auth'] = true;
+        $_SESSION['sermony_user_id'] = (int)$row['id'];
         $_SESSION['sermony_last_active'] = time();
+        $u = db()->prepare("UPDATE users SET last_login_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=:id");
+        $u->bindValue(':id', (int)$row['id'], SQLITE3_INTEGER);
+        $u->execute();
+        audit('login', null, (int)$row['id'], $row['username']);
         header('Location: ?'); exit;
     }
     logLoginAttempt(false);
-    showLogin('Invalid password.'); exit;
+    audit('login_failed', 'username=' . $username, null, $username);
+    showLogin('Invalid username or password.'); exit;
 }
 
 function handleLogout(): never {
+    $u = currentUser();
+    if ($u) audit('logout', null, (int)$u['id'], $u['username']);
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
         $p = session_get_cookie_params();
@@ -533,18 +601,27 @@ function handleLogout(): never {
 }
 
 function handleSetupPassword(): never {
-    $existing = setting('admin_password_hash');
-    if ($existing && $existing !== '' && !isLoggedIn()) { header('Location: ?action=login'); exit; }
+    $existing = (int)db()->querySingle('SELECT COUNT(*) FROM users');
+    if ($existing > 0 && !isLoggedIn()) { header('Location: ?action=login'); exit; }
 
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') { showSetupPassword(); exit; }
     verifyCsrf();
+    $username = trim((string)($_POST['username'] ?? 'admin'));
+    if ($username === '') $username = 'admin';
     $pw = $_POST['password'] ?? '';
     $pw2 = $_POST['password_confirm'] ?? '';
     if (strlen($pw) < 6) { showSetupPassword('Password must be at least 6 characters.'); exit; }
     if ($pw !== $pw2) { showSetupPassword('Passwords do not match.'); exit; }
 
-    setSetting('admin_password_hash', password_hash($pw, PASSWORD_BCRYPT));
+    $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, \'admin\')');
+    $s->bindValue(':u', $username, SQLITE3_TEXT);
+    $s->bindValue(':h', password_hash($pw, PASSWORD_BCRYPT), SQLITE3_TEXT);
+    $s->execute();
+    $newId = (int)db()->lastInsertRowID();
     $_SESSION['sermony_auth'] = true;
+    $_SESSION['sermony_user_id'] = $newId;
+    $_SESSION['sermony_last_active'] = time();
+    audit('user.create', 'first user (setup)', $newId, $username);
     header('Location: ?'); exit;
 }
 
@@ -556,8 +633,11 @@ function showLogin(string $error = ''): never {
         <?php if ($error): ?><div class="alert-warn"><?=e($error)?></div><?php endif; ?>
         <form method="post" action="?action=login">
             <?=csrfField()?>
+            <label>Username
+                <input type="text" name="username" value="admin" autocomplete="username" autofocus required>
+            </label>
             <label>Password
-                <input type="password" name="password" autofocus required>
+                <input type="password" name="password" autocomplete="current-password" required>
             </label>
             <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Sign In</button>
         </form>
@@ -570,18 +650,21 @@ function showSetupPassword(string $error = ''): never {
     pageTop('Setup');
     ?>
     <div class="auth-box">
-        <h2>Set Admin Password</h2>
-        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">This password protects the Sermony dashboard. Set it now to get started.</p>
+        <h2>Create First Admin User</h2>
+        <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem">This account protects the Sermony dashboard. You can add more users later from Settings.</p>
         <?php if ($error): ?><div class="alert-warn"><?=e($error)?></div><?php endif; ?>
         <form method="post" action="?action=setup-password">
             <?=csrfField()?>
+            <label>Username
+                <input type="text" name="username" value="admin" autocomplete="username" autofocus required>
+            </label>
             <label>Password
-                <input type="password" name="password" minlength="6" autofocus required>
+                <input type="password" name="password" minlength="6" autocomplete="new-password" required>
             </label>
             <label>Confirm Password
-                <input type="password" name="password_confirm" minlength="6" required>
+                <input type="password" name="password_confirm" minlength="6" autocomplete="new-password" required>
             </label>
-            <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Set Password</button>
+            <button type="submit" class="btn-primary" style="width:100%;margin-top:1rem">Create User</button>
         </form>
     </div>
     <?php
@@ -783,6 +866,82 @@ function handleRotateAgentKey(): never {
     $s->bindValue(':id', $id, SQLITE3_INTEGER);
     $s->execute();
     header('Location: ?action=server&id=' . $id . '&key_rotated=1'); exit;
+}
+
+function handleUserCreate(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
+    verifyCsrf();
+    $username = trim((string)($_POST['username'] ?? ''));
+    $pw = (string)($_POST['password'] ?? '');
+    if ($username === '' || strlen($pw) < 6) {
+        header('Location: ?action=settings&user_err=' . urlencode('Username required and password must be at least 6 characters.')); exit;
+    }
+    if (!preg_match('/^[A-Za-z0-9._-]{2,32}$/', $username)) {
+        header('Location: ?action=settings&user_err=' . urlencode('Username must be 2-32 chars, letters/digits/._- only.')); exit;
+    }
+    try {
+        $s = db()->prepare('INSERT INTO users (username, password_hash, role) VALUES (:u, :h, \'admin\')');
+        $s->bindValue(':u', $username, SQLITE3_TEXT);
+        $s->bindValue(':h', password_hash($pw, PASSWORD_BCRYPT), SQLITE3_TEXT);
+        $s->execute();
+        $newId = (int)db()->lastInsertRowID();
+        audit('user.create', 'created user "' . $username . '"');
+    } catch (Throwable $e) {
+        header('Location: ?action=settings&user_err=' . urlencode('Username already exists.')); exit;
+    }
+    header('Location: ?action=settings&user_ok=1#users'); exit;
+}
+
+function handleUserDelete(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
+    verifyCsrf();
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id < 1) { header('Location: ?action=settings'); exit; }
+    $me = currentUser();
+    if ($me && (int)$me['id'] === $id) {
+        header('Location: ?action=settings&user_err=' . urlencode('You cannot delete your own account.')); exit;
+    }
+    $count = (int)db()->querySingle('SELECT COUNT(*) FROM users');
+    if ($count <= 1) {
+        header('Location: ?action=settings&user_err=' . urlencode('Cannot delete the last user.')); exit;
+    }
+    $g = db()->prepare('SELECT username FROM users WHERE id=:id');
+    $g->bindValue(':id', $id, SQLITE3_INTEGER);
+    $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$row) { header('Location: ?action=settings'); exit; }
+    $s = db()->prepare('DELETE FROM users WHERE id=:id');
+    $s->bindValue(':id', $id, SQLITE3_INTEGER);
+    $s->execute();
+    audit('user.delete', 'deleted user "' . $row['username'] . '"');
+    header('Location: ?action=settings&user_ok=1#users'); exit;
+}
+
+function handleUserPassword(): never {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') { header('Location: ?action=settings'); exit; }
+    verifyCsrf();
+    $me = currentUser();
+    if (!$me) { header('Location: ?action=login'); exit; }
+    $current = (string)($_POST['current_password'] ?? '');
+    $new = (string)($_POST['new_password'] ?? '');
+    $new2 = (string)($_POST['new_password_confirm'] ?? '');
+    if (strlen($new) < 6) {
+        header('Location: ?action=settings&user_err=' . urlencode('New password must be at least 6 characters.')); exit;
+    }
+    if ($new !== $new2) {
+        header('Location: ?action=settings&user_err=' . urlencode('New passwords do not match.')); exit;
+    }
+    $g = db()->prepare('SELECT password_hash FROM users WHERE id=:id');
+    $g->bindValue(':id', (int)$me['id'], SQLITE3_INTEGER);
+    $row = $g->execute()->fetchArray(SQLITE3_ASSOC);
+    if (!$row || !password_verify($current, $row['password_hash'])) {
+        header('Location: ?action=settings&user_err=' . urlencode('Current password is incorrect.')); exit;
+    }
+    $u = db()->prepare('UPDATE users SET password_hash=:h WHERE id=:id');
+    $u->bindValue(':h', password_hash($new, PASSWORD_BCRYPT), SQLITE3_TEXT);
+    $u->bindValue(':id', (int)$me['id'], SQLITE3_INTEGER);
+    $u->execute();
+    audit('user.password_change', 'self');
+    header('Location: ?action=settings&user_ok=1#users'); exit;
 }
 
 function handleExportCsv(): never {
@@ -1354,11 +1513,112 @@ function showSettings(): never {
         <?php doHook('settings_panel'); ?>
         <fieldset style="margin-top:1.5rem">
             <legend>Security</legend>
-            <a href="?action=setup-password" class="btn-secondary">Change Password</a>
-            <label style="margin-top:1rem">API IP Allowlist (comma-separated, empty = allow all)
+            <label>API IP Allowlist (comma-separated, empty = allow all)
                 <input type="text" name="api_ip_allowlist" value="<?=e(setting('api_ip_allowlist'))?>" placeholder="203.0.113.10, 10.0.1.0/24" form="settings-form">
             </label>
             <p style="font-size:.75rem;color:var(--subtle);margin-top:.25rem">Restricts which IPs can call the enroll and ingest endpoints. Leave empty to allow all.</p>
+        </fieldset>
+
+        <?php
+        $usersList = [];
+        $ru = db()->query('SELECT id, username, role, created_at, last_login_at FROM users ORDER BY username');
+        while ($row = $ru->fetchArray(SQLITE3_ASSOC)) $usersList[] = $row;
+        $me = currentUser();
+        $userErr = $_GET['user_err'] ?? '';
+        $userOk = isset($_GET['user_ok']);
+        ?>
+        <fieldset id="users" style="margin-top:1.5rem">
+            <legend>Users (<?=count($usersList)?>)</legend>
+            <?php if ($userErr): ?><div class="alert-warn"><?=e($userErr)?></div><?php endif; ?>
+            <?php if ($userOk): ?><div class="alert-ok">Saved.</div><?php endif; ?>
+            <table style="width:100%;font-size:.82rem;border-collapse:collapse;margin-top:.25rem">
+                <thead><tr>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Username</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Role</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Created</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Last Login</th>
+                    <th style="padding:.3rem .5rem;border-bottom:1px solid var(--card-border)"></th>
+                </tr></thead>
+                <tbody>
+                <?php foreach ($usersList as $u): $isMe = $me && (int)$me['id'] === (int)$u['id']; ?>
+                    <tr>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border)"><strong><?=e($u['username'])?></strong><?php if ($isMe): ?> <span style="color:var(--muted);font-size:.7rem">(you)</span><?php endif; ?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted)"><?=e($u['role'])?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e(substr($u['created_at'] ?? '', 0, 10))?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.75rem"><?=e($u['last_login_at'] ? str_replace('T',' ',substr($u['last_login_at'],0,16)) : '—')?></td>
+                        <td style="padding:.3rem .5rem;border-bottom:1px solid var(--foot-border);text-align:right">
+                            <?php if (!$isMe): ?>
+                            <form method="post" action="?action=user-delete" style="display:inline" onsubmit="return confirm('Delete user <?=e($u['username'])?>?')">
+                                <?=csrfField()?>
+                                <input type="hidden" name="id" value="<?=(int)$u['id']?>">
+                                <button type="submit" class="btn-sm btn-sm-danger">Delete</button>
+                            </form>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+
+            <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
+                <strong style="font-size:.82rem">Add User</strong>
+                <form method="post" action="?action=user-create" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end;margin-top:.5rem">
+                    <?=csrfField()?>
+                    <label style="flex:1;min-width:140px">Username
+                        <input type="text" name="username" autocomplete="off" required pattern="[A-Za-z0-9._\-]{2,32}">
+                    </label>
+                    <label style="flex:1;min-width:140px">Password
+                        <input type="password" name="password" minlength="6" autocomplete="new-password" required>
+                    </label>
+                    <button type="submit" class="btn-sm">Create</button>
+                </form>
+            </div>
+
+            <div style="margin-top:1rem;padding-top:.75rem;border-top:1px solid var(--card-border)">
+                <strong style="font-size:.82rem">Change My Password (<?=e($me['username'] ?? '')?>)</strong>
+                <form method="post" action="?action=user-password" style="display:flex;flex-direction:column;gap:.4rem;margin-top:.5rem;max-width:360px">
+                    <?=csrfField()?>
+                    <input type="password" name="current_password" placeholder="Current password" autocomplete="current-password" required>
+                    <input type="password" name="new_password" placeholder="New password" minlength="6" autocomplete="new-password" required>
+                    <input type="password" name="new_password_confirm" placeholder="Confirm new password" minlength="6" autocomplete="new-password" required>
+                    <button type="submit" class="btn-sm" style="align-self:flex-start">Change Password</button>
+                </form>
+            </div>
+        </fieldset>
+
+        <?php
+        $auditRows = [];
+        $ra = db()->query('SELECT user_id, username, action, details, ip, created_at FROM audit_log ORDER BY id DESC LIMIT 200');
+        while ($row = $ra->fetchArray(SQLITE3_ASSOC)) $auditRows[] = $row;
+        ?>
+        <fieldset style="margin-top:1.5rem">
+            <legend>Audit Log (last <?=count($auditRows)?>)</legend>
+            <?php if (empty($auditRows)): ?>
+                <p style="color:var(--muted);font-size:.82rem">No audit events yet.</p>
+            <?php else: ?>
+            <div style="max-height:480px;overflow:auto;border:1px solid var(--card-border);border-radius:6px">
+            <table style="width:100%;font-size:.78rem;border-collapse:collapse">
+                <thead style="position:sticky;top:0;background:var(--card)"><tr>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">When</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">User</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Action</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">Details</th>
+                    <th style="text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--card-border);color:var(--muted);font-size:.7rem;text-transform:uppercase">IP</th>
+                </tr></thead>
+                <tbody>
+                <?php foreach ($auditRows as $a): ?>
+                    <tr>
+                        <td style="padding:.25rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-family:monospace;font-size:.72rem;white-space:nowrap"><?=e(str_replace('T',' ',substr($a['created_at'],0,19)))?></td>
+                        <td style="padding:.25rem .5rem;border-bottom:1px solid var(--foot-border)"><?=$a['username'] ? '<strong>' . e($a['username']) . '</strong>' : '<span style="color:var(--muted)">—</span>'?></td>
+                        <td style="padding:.25rem .5rem;border-bottom:1px solid var(--foot-border);font-family:monospace;font-size:.72rem"><?=e($a['action'])?></td>
+                        <td style="padding:.25rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-size:.72rem"><?=e($a['details'] ?? '')?></td>
+                        <td style="padding:.25rem .5rem;border-bottom:1px solid var(--foot-border);color:var(--muted);font-family:monospace;font-size:.72rem"><?=e($a['ip'] ?? '')?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+            </div>
+            <?php endif; ?>
         </fieldset>
 
         <?php $plugins = loadPlugins(); if (!empty($plugins)): ?>
